@@ -16,6 +16,7 @@ import '../../domain/enums/rule_action.dart';
 import '../../domain/enums/rule_priority.dart';
 import '../../domain/entities/dns_profile.dart';
 import '../../domain/enums/dns_protocol.dart';
+import '../../domain/usecases/shield/classify_network_use_case.dart';
 import '../../platform/platform_channel_bridge.dart';
 
 // ─────────────────────────────────────────────────────────────
@@ -46,8 +47,63 @@ final activeModeProvider = StateNotifierProvider<ModeNotifier, ProtectionMode>(
 );
 
 class ModeNotifier extends StateNotifier<ProtectionMode> {
-  ModeNotifier(this._ref) : super(ProtectionMode.home);
+  ModeNotifier(this._ref) : super(ProtectionMode.home) {
+    _listenNetwork();
+  }
   final Ref _ref;
+
+  void _listenNetwork() {
+    _ref.listen<AsyncValue<NetworkStatus>>(networkStatusProvider, (prev, next) async {
+      final status = next.value;
+      if (status == null) return;
+
+      final db = _ref.read(databaseProvider);
+      final trustedRows = await db.select(db.trustedNetworks).get();
+      final trusted = trustedRows.map((r) => TrustedNetwork(
+        id: r.id,
+        ssid: r.ssid,
+        bssid: r.bssid,
+        trustLevel: NetworkTrustLevel.values.firstWhere(
+          (t) => t.name == r.trustLevel,
+          orElse: () => NetworkTrustLevel.trusted,
+        ),
+        profileId: r.profileId,
+      )).toList();
+
+      final input = NetworkClassificationInput(
+        ssid: status.ssid,
+        bssid: status.bssid,
+        authType: status.authType,
+        isRoaming: status.isRoaming,
+        hasCaptivePortal: false,
+        isCellular: status.isCellular,
+        trustedNetworks: trusted,
+      );
+
+      const classifier = ClassifyNetworkUseCase();
+      final result = classifier.classify(input);
+
+      if (result.autoSwitched && result.suggestedMode != state) {
+        state = result.suggestedMode;
+
+        if (result.plainAlert != null) {
+          final alertId = 'alert_auto_${DateTime.now().millisecondsSinceEpoch}';
+          await db.into(db.alerts).insert(AlertsCompanion.insert(
+            id: alertId,
+            type: 'profile_switch',
+            severity: result.trustLevel == NetworkTrustLevel.hostile ? 'critical' : 'info',
+            title: 'Shield Protection Active',
+            body: result.plainAlert!,
+            createdAt: DateTime.now().millisecondsSinceEpoch,
+          ));
+          _ref.read(alertsProvider.notifier).refresh();
+        }
+
+        await _ref.read(firewallRulesProvider.notifier).syncRulesToNative();
+        await _ref.read(platformBridgeProvider).startFirewall();
+      }
+    });
+  }
 
   Future<void> setMode(ProtectionMode mode) async {
     state = mode;
@@ -230,7 +286,11 @@ class FirewallRulesNotifier
         });
       }
 
-      await _bridge.updateRules(serialized);
+      final blockLan = activeMode == ProtectionMode.publicWifi ||
+          activeMode == ProtectionMode.travel ||
+          activeMode == ProtectionMode.lockdown;
+
+      await _bridge.updateRules(serialized, blockLan: blockLan);
     } catch (e) {
       // Ignore
     }
@@ -302,10 +362,14 @@ class AlertsNotifier extends StateNotifier<List<Alert>> {
   AlertsNotifier(this._db, this._bridge) : super([]) {
     _loadFromDb();
     _listenNative();
+    _monitorConnectionAnomalies();
   }
 
   final AppDatabase _db;
   final PlatformChannelBridge _bridge;
+
+  final _connectionHistory = <String, List<DateTime>>{};
+  final _lastAnomalyAlert = <String, DateTime>{};
 
   Future<void> _loadFromDb() async {
     final rows = await _db.select(_db.alerts).get();
@@ -367,8 +431,53 @@ class AlertsNotifier extends StateNotifier<List<Alert>> {
             severity: alert.severity,
             title: alert.title,
             body: alert.body,
+            appId: Value(alert.appId),
             createdAt: alert.createdAt.millisecondsSinceEpoch,
           ));
+    });
+  }
+
+  void _monitorConnectionAnomalies() {
+    _bridge.connectionEvents.listen((e) async {
+      final appId = e['appId'] as String? ?? 'unknown';
+      if (appId == 'unknown' || appId == 'dns' || appId == 'system') return;
+
+      final now = DateTime.now();
+      final times = _connectionHistory.putIfAbsent(appId, () => []);
+      times.add(now);
+
+      // Remove connections older than 60 seconds
+      times.removeWhere((t) => now.difference(t).inSeconds > 60);
+
+      // Threshold: 40 connections in 60 seconds
+      if (times.length > 40) {
+        final lastAlert = _lastAnomalyAlert[appId];
+        if (lastAlert == null || now.difference(lastAlert).inMinutes >= 2) {
+          _lastAnomalyAlert[appId] = now;
+
+          final alert = Alert(
+            id: 'anomaly_${now.millisecondsSinceEpoch}_$appId',
+            type: 'anomaly',
+            severity: 'warning',
+            title: 'Unusual Network Activity',
+            body: '$appId is connecting to an unusually high number of servers. Tap to review.',
+            appId: appId,
+            status: 'unread',
+            createdAt: now,
+          );
+
+          state = [alert, ...state];
+          await _db.into(_db.alerts).insert(AlertsCompanion.insert(
+                id: alert.id,
+                type: alert.type,
+                severity: alert.severity,
+                title: alert.title,
+                body: alert.body,
+                appId: Value(alert.appId),
+                createdAt: alert.createdAt.millisecondsSinceEpoch,
+              ));
+        }
+      }
     });
   }
 
@@ -377,6 +486,8 @@ class AlertsNotifier extends StateNotifier<List<Alert>> {
         .map((a) => a.id == id ? a.markRead() : a)
         .toList();
   }
+
+  void refresh() => _loadFromDb();
 }
 
 // ─────────────────────────────────────────────────────────────

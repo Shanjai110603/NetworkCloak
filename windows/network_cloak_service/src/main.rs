@@ -63,6 +63,11 @@ fn main() {
                         }
                     }
                 }
+
+                if val.get("blockLan").and_then(|b| b.as_bool()).unwrap_or(false) {
+                    let _ = engine.block_remote_ports(&[137, 138, 139, 445]);
+                    println!("LAN Exposure blocked (NetBIOS/SMB ports 137-139, 445)");
+                }
             }
             "stopFirewall" => {
                 let mut engine = wfp_clone.lock().unwrap();
@@ -71,11 +76,14 @@ fn main() {
             }
             "activateLockdown" => {
                 println!("Emergency Lockdown activated.");
-                // User-mode global block is handled in the rule engine;
-                // in Rust we clear other rules and apply global block if requested.
+                let mut engine = wfp_clone.lock().unwrap();
+                engine.clear_rules();
+                let _ = engine.block_all_outbound();
             }
             "deactivateLockdown" => {
                 println!("Lockdown deactivated.");
+                let mut engine = wfp_clone.lock().unwrap();
+                engine.clear_rules();
             }
             _ => {
                 println!("Unknown command: {}", command);

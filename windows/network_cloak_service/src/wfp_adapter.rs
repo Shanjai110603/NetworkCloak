@@ -116,6 +116,85 @@ impl WfpEngine {
         Ok(())
     }
 
+    /// Add global block filters to deny all outbound IPv4 and IPv6 traffic.
+    pub fn block_all_outbound(&mut self) -> Result<(), String> {
+        unsafe {
+            self.add_global_block_filter(FWPM_LAYER_ALE_AUTH_CONNECT_V4)?;
+            self.add_global_block_filter(FWPM_LAYER_ALE_AUTH_CONNECT_V6)?;
+            Ok(())
+        }
+    }
+
+    unsafe fn add_global_block_filter(&mut self, layer_guid: GUID) -> Result<(), String> {
+        let mut filter = FWPM_FILTER0::default();
+        filter.displayData.name = PWSTR(windows::core::w!("Network Cloak Global Lockdown Rule").as_ptr() as *mut _);
+        filter.layerKey = layer_guid;
+        filter.subLayerKey = NETWORK_CLOAK_SUBLAYER;
+        filter.weight.r#type = FWP_EMPTY; // Auto-weight
+        filter.numFilterConditions = 0;
+        filter.action.r#type = FWP_ACTION_BLOCK;
+
+        let mut filter_id: u64 = 0;
+        let status = FwpmFilterAdd0(
+            self.engine_handle,
+            &filter,
+            None,
+            Some(&mut filter_id),
+        );
+
+        if status != 0 {
+            return Err(format!("FwpmFilterAdd0 failed for global block layer: ERROR 0x{:X}", status));
+        }
+
+        self.active_filters.push(filter_id);
+        Ok(())
+    }
+
+    /// Add filters to block outbound traffic to specific remote ports globally.
+    pub fn block_remote_ports(&mut self, ports: &[u16]) -> Result<(), String> {
+        unsafe {
+            for &port in ports {
+                self.add_port_block_filter(port, FWPM_LAYER_ALE_AUTH_CONNECT_V4)?;
+                self.add_port_block_filter(port, FWPM_LAYER_ALE_AUTH_CONNECT_V6)?;
+            }
+            Ok(())
+        }
+    }
+
+    unsafe fn add_port_block_filter(&mut self, port: u16, layer_guid: GUID) -> Result<(), String> {
+        let mut condition = FWPM_FILTER_CONDITION0::default();
+        condition.fieldKey = FWPM_CONDITION_IP_REMOTE_PORT;
+        condition.matchType = FWP_MATCH_EQUAL;
+        condition.conditionValue.r#type = FWP_UINT16;
+        condition.conditionValue.Anonymous.uint16 = port;
+
+        let mut filter = FWPM_FILTER0::default();
+        let name_str = format!("Network Cloak Port {} Block Rule", port);
+        let name_w: Vec<u16> = name_str.encode_utf16().chain(Some(0)).collect();
+        filter.displayData.name = PWSTR(name_w.as_ptr() as *mut _);
+        filter.layerKey = layer_guid;
+        filter.subLayerKey = NETWORK_CLOAK_SUBLAYER;
+        filter.weight.r#type = FWP_EMPTY;
+        filter.numFilterConditions = 1;
+        filter.filterCondition = &mut condition;
+        filter.action.r#type = FWP_ACTION_BLOCK;
+
+        let mut filter_id: u64 = 0;
+        let status = FwpmFilterAdd0(
+            self.engine_handle,
+            &filter,
+            None,
+            Some(&mut filter_id),
+        );
+
+        if status != 0 {
+            return Err(format!("FwpmFilterAdd0 failed for port block {}: ERROR 0x{:X}", port, status));
+        }
+
+        self.active_filters.push(filter_id);
+        Ok(())
+    }
+
     /// Clear all active filters added by this service.
     pub fn clear_rules(&mut self) {
         unsafe {

@@ -257,5 +257,63 @@ void main() {
       expect(result.matchedPriority, equals(RulePriority.manualApp));
       expect(result.action, equals(RuleAction.block));
     });
+
+    test('same priority level: block overrides allow', () {
+      final olderBlock = FirewallRule(
+        id: 'older_block',
+        appId: 'com.example.app',
+        action: RuleAction.block,
+        priority: RulePriority.manualApp,
+        conditionsJson: '{}',
+        isGlobal: false,
+        createdAt: DateTime.now().subtract(const Duration(minutes: 10)),
+        updatedAt: DateTime.now().subtract(const Duration(minutes: 10)),
+      );
+      final newerAllow = FirewallRule(
+        id: 'newer_allow',
+        appId: 'com.example.app',
+        action: RuleAction.allow,
+        priority: RulePriority.manualApp,
+        conditionsJson: '{}',
+        isGlobal: false,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      final uc = usecase(
+        manualRules: [newerAllow, olderBlock],
+      );
+      final result = uc.evaluate(ctx(appId: 'com.example.app'));
+      expect(result.action, equals(RuleAction.block));
+    });
+
+    test('same priority level and action: newest wins', () {
+      final olderAllow = FirewallRule(
+        id: 'older_allow',
+        appId: 'com.example.app',
+        action: RuleAction.allow,
+        priority: RulePriority.manualApp,
+        conditionsJson: '{}',
+        isGlobal: false,
+        createdAt: DateTime.now().subtract(const Duration(minutes: 10)),
+        updatedAt: DateTime.now().subtract(const Duration(minutes: 10)),
+      );
+      final newerAllow = FirewallRule(
+        id: 'newer_allow',
+        appId: 'com.example.app',
+        action: RuleAction.allow,
+        priority: RulePriority.manualApp,
+        conditionsJson: '{}',
+        isGlobal: false,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+
+      final uc = usecase(
+        manualRules: [olderAllow, newerAllow],
+      );
+      final result = uc.evaluate(ctx(appId: 'com.example.app'));
+      expect(result.matchedRuleId, equals('newer_allow'));
+    });
   });
 }

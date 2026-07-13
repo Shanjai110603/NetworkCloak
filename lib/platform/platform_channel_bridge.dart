@@ -12,7 +12,7 @@ const _kEventChannel = 'com.networkcloak/events';
 abstract class FirewallPlatform {
   Future<void> startFirewall();
   Future<void> stopFirewall(String reason);
-  Future<void> updateRules(List<Map<String, dynamic>> serializedRules);
+  Future<void> updateRules(List<Map<String, dynamic>> serializedRules, {bool blockLan = false});
   Future<void> activateLockdown(List<String> allowlist);
   Future<void> deactivateLockdown(String reason);
   Future<Map<String, dynamic>> getStatus();
@@ -71,8 +71,11 @@ class PlatformChannelBridge
   }
 
   @override
-  Future<void> updateRules(List<Map<String, dynamic>> rules) async {
-    await _method.invokeMethod('updateRules', {'rules': rules});
+  Future<void> updateRules(List<Map<String, dynamic>> rules, {bool blockLan = false}) async {
+    await _method.invokeMethod('updateRules', {
+      'rules': rules,
+      'blockLan': blockLan,
+    });
   }
 
   @override

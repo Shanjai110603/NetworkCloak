@@ -101,36 +101,60 @@ class EvaluateRuleUseCase {
     }
 
     // ── P2: Temporary Rules ────────────────────────────────
-    for (final tmp in temporaryRules) {
-      if (tmp.appId == ctx.appId && !tmp.isExpired) {
-        if (_conditionsMatch(tmp.conditionsJson, ctx)) {
-          return RuleEvaluationResult(
-            action: tmp.action,
-            matchedPriority: RulePriority.temporary,
-            matchedRuleId: tmp.id,
-            plainReason: _temporaryReason(tmp.action, tmp.endAt),
-          );
+    final activeTemp = temporaryRules
+        .where((tmp) => tmp.appId == ctx.appId && !tmp.isExpired)
+        .toList()
+      ..sort((a, b) {
+        final aBlocks = a.action.isBlocking ? 1 : 0;
+        final bBlocks = b.action.isBlocking ? 1 : 0;
+        if (aBlocks != bBlocks) {
+          return bBlocks.compareTo(aBlocks);
         }
+        return b.startAt.compareTo(a.startAt);
+      });
+
+    for (final tmp in activeTemp) {
+      if (_conditionsMatch(tmp.conditionsJson, ctx)) {
+        return RuleEvaluationResult(
+          action: tmp.action,
+          matchedPriority: RulePriority.temporary,
+          matchedRuleId: tmp.id,
+          plainReason: _temporaryReason(tmp.action, tmp.endAt),
+        );
       }
     }
 
     // ── P3: Session Rules ──────────────────────────────────
-    for (final sr in sessionRules) {
-      if (sr.appId == ctx.appId) {
-        return RuleEvaluationResult(
-          action: sr.action,
-          matchedPriority: RulePriority.session,
-          matchedRuleId: sr.id,
-          plainReason: _actionReason(sr.action),
-        );
-      }
+    final activeSession = sessionRules
+        .where((sr) => sr.appId == ctx.appId)
+        .toList()
+      ..sort((a, b) {
+        final aBlocks = a.action.isBlocking ? 1 : 0;
+        final bBlocks = b.action.isBlocking ? 1 : 0;
+        return bBlocks.compareTo(aBlocks);
+      });
+
+    for (final sr in activeSession) {
+      return RuleEvaluationResult(
+        action: sr.action,
+        matchedPriority: RulePriority.session,
+        matchedRuleId: sr.id,
+        plainReason: _actionReason(sr.action),
+      );
     }
 
     // ── P4: Manual App Rules ───────────────────────────────
     final appManual = manualRules
         .where((r) => r.appId == ctx.appId)
         .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      ..sort((a, b) {
+        final aBlocks = a.action.isBlocking ? 1 : 0;
+        final bBlocks = b.action.isBlocking ? 1 : 0;
+        if (aBlocks != bBlocks) {
+          return bBlocks.compareTo(aBlocks);
+        }
+        return b.createdAt.compareTo(a.createdAt);
+      });
 
     for (final rule in appManual) {
       if (_conditionsMatch(rule.conditionsJson, ctx)) {
@@ -145,9 +169,20 @@ class EvaluateRuleUseCase {
     }
 
     // ── P5: Profile Rules ──────────────────────────────────
-    for (final rule in profileRules) {
-      final matches = rule.appId == null || rule.appId == ctx.appId;
-      if (matches && _conditionsMatch(rule.conditionsJson, ctx)) {
+    final activeProfile = profileRules
+        .where((rule) => rule.appId == null || rule.appId == ctx.appId)
+        .toList()
+      ..sort((a, b) {
+        final aBlocks = a.action.isBlocking ? 1 : 0;
+        final bBlocks = b.action.isBlocking ? 1 : 0;
+        if (aBlocks != bBlocks) {
+          return bBlocks.compareTo(aBlocks);
+        }
+        return b.createdAt.compareTo(a.createdAt);
+      });
+
+    for (final rule in activeProfile) {
+      if (_conditionsMatch(rule.conditionsJson, ctx)) {
         return RuleEvaluationResult(
           action: rule.action,
           matchedPriority: RulePriority.profile,
@@ -158,7 +193,17 @@ class EvaluateRuleUseCase {
     }
 
     // ── P6: Global Rules ───────────────────────────────────
-    for (final rule in globalRules) {
+    final activeGlobal = globalRules.toList()
+      ..sort((a, b) {
+        final aBlocks = a.action.isBlocking ? 1 : 0;
+        final bBlocks = b.action.isBlocking ? 1 : 0;
+        if (aBlocks != bBlocks) {
+          return bBlocks.compareTo(aBlocks);
+        }
+        return b.createdAt.compareTo(a.createdAt);
+      });
+
+    for (final rule in activeGlobal) {
       if (_conditionsMatch(rule.conditionsJson, ctx)) {
         return RuleEvaluationResult(
           action: rule.action,
