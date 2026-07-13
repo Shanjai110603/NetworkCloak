@@ -5,7 +5,7 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/database/app_database.dart'
-    hide Alert, FirewallRule, LiveConnection;
+    hide Alert, FirewallRule, LiveConnection, DnsProfile;
 import '../../domain/entities/alert.dart';
 import '../../domain/entities/connection_record.dart';
 import '../../domain/entities/firewall_rule.dart';
