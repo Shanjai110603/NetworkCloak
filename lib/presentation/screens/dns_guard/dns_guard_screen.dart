@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/providers.dart';
 import '../../../app/theme/app_theme.dart';
@@ -31,6 +33,14 @@ class DnsGuardScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final dnsProfile = ref.watch(dnsProfileProvider);
+
+    // Dynamically generate the Base64 DNS stamp config string
+    final configBytes = utf8.encode(json.encode({
+      'provider': dnsProfile.name,
+      'endpoint': dnsProfile.endpoint,
+      'categories': dnsProfile.enabledCategories,
+    }));
+    final configString = 'NC-DNS-v1:${base64.encode(configBytes)}';
 
     return Scaffold(
       backgroundColor: NcColors.bg,
@@ -78,10 +88,13 @@ class DnsGuardScreen extends ConsumerWidget {
                   .entries
                   .map((e) => _BlocklistRow(
                         name: e.value.$1,
-                        isOn: e.value.$2,
+                        isOn: dnsProfile.enabledCategories.contains(e.value.$1.toLowerCase()) || (e.key >= 4 && e.key <= 7),
                         icon: e.value.$3,
                         isAlwaysOn: e.key >= 4 && e.key <= 7,
                         isLast: e.key == _categories.length - 1,
+                        onChanged: (val) {
+                          ref.read(dnsProfileProvider.notifier).toggleCategory(e.value.$1.toLowerCase());
+                        },
                       ))
                   .toList(),
             ),
@@ -102,9 +115,9 @@ class DnsGuardScreen extends ConsumerWidget {
             ),
             child: Column(
               children: [
-                const Text(
-                  'NC-DNS-v1:eyJwcm92aWRlciI6ImNsb3VkZmxhcmUi...',
-                  style: TextStyle(
+                Text(
+                  configString,
+                  style: const TextStyle(
                     color: NcColors.textSecondary,
                     fontFamily: 'monospace',
                     fontSize: 12,
@@ -117,8 +130,13 @@ class DnsGuardScreen extends ConsumerWidget {
                     Expanded(
                       child: OutlinedButton.icon(
                         icon: const Icon(Icons.copy_outlined, size: 16),
-                        label: const Text('Copy'),
-                        onPressed: () {},
+                        label: const Text('Copy Stamp'),
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: configString));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('DNS Stamp copied to clipboard!')),
+                          );
+                        },
                         style: OutlinedButton.styleFrom(
                           foregroundColor: NcColors.primary,
                           side: const BorderSide(color: NcColors.primary),
@@ -128,9 +146,9 @@ class DnsGuardScreen extends ConsumerWidget {
                     const SizedBox(width: 10),
                     Expanded(
                       child: OutlinedButton.icon(
-                        icon: const Icon(Icons.input_outlined, size: 16),
-                        label: const Text('Import'),
-                        onPressed: () {},
+                        icon: const Icon(Icons.download_outlined, size: 16),
+                        label: const Text('Import Stamp'),
+                        onPressed: () => _showImportDialog(context, ref),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: NcColors.textSecondary,
                           side: const BorderSide(color: NcColors.border),
@@ -144,6 +162,74 @@ class DnsGuardScreen extends ConsumerWidget {
           ),
 
           const SizedBox(height: 80),
+        ],
+      ),
+    );
+  }
+
+  void _showImportDialog(BuildContext context, WidgetRef ref) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: NcColors.surface,
+        title: const Text('Import DNS Stamp'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Paste a valid base64-encoded Network Cloak DNS Stamp (starts with NC-DNS-v1:)',
+              style: TextStyle(fontSize: 12, color: NcColors.textSecondary),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              maxLines: 3,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              decoration: const InputDecoration(
+                hintText: 'NC-DNS-v1:...',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: NcColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final stamp = controller.text.trim();
+              if (stamp.startsWith('NC-DNS-v1:')) {
+                try {
+                  final encoded = stamp.substring('NC-DNS-v1:'.length);
+                  final decoded = utf8.decode(base64.decode(encoded));
+                  final Map<String, dynamic> data = json.decode(decoded);
+                  final providerName = data['provider'] as String? ?? 'Custom';
+                  final endpoint = data['endpoint'] as String? ?? 'system';
+                  
+                  ref.read(dnsProfileProvider.notifier).selectProvider(providerName, endpoint);
+                  Navigator.pop(ctx);
+                  
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Imported DNS profile: $providerName successfully!')),
+                  );
+                } catch (_) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Invalid DNS Stamp payload.')),
+                  );
+                }
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Invalid DNS Stamp format.')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: NcColors.primary),
+            child: const Text('Import'),
+          ),
         ],
       ),
     );
@@ -202,44 +288,33 @@ class _DnsProviderTile extends StatelessWidget {
   }
 }
 
-class _BlocklistRow extends StatefulWidget {
+class _BlocklistRow extends StatelessWidget {
   const _BlocklistRow({
     required this.name,
     required this.isOn,
     required this.icon,
     required this.isAlwaysOn,
     required this.isLast,
+    required this.onChanged,
   });
   final String name;
   final bool isOn;
   final IconData icon;
   final bool isAlwaysOn;
   final bool isLast;
-
-  @override
-  State<_BlocklistRow> createState() => _BlocklistRowState();
-}
-
-class _BlocklistRowState extends State<_BlocklistRow> {
-  late bool _enabled;
-
-  @override
-  void initState() {
-    super.initState();
-    _enabled = widget.isOn;
-  }
+  final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         ListTile(
-          leading: Icon(widget.icon,
-              color: _enabled ? NcColors.primary : NcColors.textMuted,
+          leading: Icon(icon,
+              color: isOn ? NcColors.primary : NcColors.textMuted,
               size: 20),
-          title: Text(widget.name,
+          title: Text(name,
               style: Theme.of(context).textTheme.bodyLarge),
-          trailing: widget.isAlwaysOn
+          trailing: isAlwaysOn
               ? const Chip(
                   label: Text('Always on',
                       style: TextStyle(fontSize: 10, color: NcColors.primary)),
@@ -248,11 +323,11 @@ class _BlocklistRowState extends State<_BlocklistRow> {
                   padding: EdgeInsets.zero,
                 )
               : Switch(
-                  value: _enabled,
-                  onChanged: (v) => setState(() => _enabled = v),
+                  value: isOn,
+                  onChanged: onChanged,
                 ),
         ),
-        if (!widget.isLast)
+        if (!isLast)
           const Divider(
               height: 0, indent: 16, endIndent: 16, color: NcColors.border),
       ],

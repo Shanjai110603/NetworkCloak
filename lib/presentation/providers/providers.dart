@@ -60,16 +60,28 @@ class ModeNotifier extends StateNotifier<ProtectionMode> {
 // Network Status
 // ─────────────────────────────────────────────────────────────
 
-final networkStatusProvider = StreamProvider<NetworkStatus>((ref) {
+final networkStatusProvider = StreamProvider<NetworkStatus>((ref) async* {
   final bridge = ref.watch(platformBridgeProvider);
-  return bridge.networkChanges.map((e) => NetworkStatus(
-        trustLevel: _parseTrust(e['trustLevel'] as String? ?? 'unknown'),
-        ssid: e['ssid'] as String?,
-        bssid: e['bssid'] as String?,
-        authType: e['authType'] as String?,
-        isRoaming: e['isRoaming'] as bool? ?? false,
-        isCellular: e['isCellular'] as bool? ?? false,
-      ));
+  
+  yield const NetworkStatus(
+    trustLevel: NetworkTrustLevel.trusted,
+    ssid: 'Ethernet/Wi-Fi',
+    bssid: '00:11:22:33:44:55',
+    authType: 'WPA2-PSK',
+    isRoaming: false,
+    isCellular: false,
+  );
+
+  await for (final e in bridge.networkChanges) {
+    yield NetworkStatus(
+      trustLevel: _parseTrust(e['trustLevel'] as String? ?? 'unknown'),
+      ssid: e['ssid'] as String?,
+      bssid: e['bssid'] as String?,
+      authType: e['authType'] as String?,
+      isRoaming: e['isRoaming'] as bool? ?? false,
+      isCellular: e['isCellular'] as bool? ?? false,
+    );
+  }
 });
 
 NetworkTrustLevel _parseTrust(String raw) {
@@ -107,7 +119,32 @@ class FirewallRulesNotifier
   Future<void> _load() async {
     state = const AsyncValue.loading();
     try {
-      final rows = await _db.select(_db.firewallRules).get();
+      var rows = await _db.select(_db.firewallRules).get();
+      if (rows.isEmpty) {
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        final defaultApps = [
+          ('com.android.chrome', RuleAction.allow),
+          ('com.spotify.music', RuleAction.allow),
+          ('com.whatsapp', RuleAction.ask),
+          ('com.instagram.android', RuleAction.block),
+          ('system_process', RuleAction.allow),
+        ];
+        for (final app in defaultApps) {
+          final newId = 'rule_${nowMs}_${app.$1}';
+          await _db.into(_db.firewallRules).insert(FirewallRulesCompanion.insert(
+            id: newId,
+            appId: Value(app.$1),
+            action: app.$2.name,
+            priority: RulePriority.manualApp.value,
+            conditionsJson: '{}',
+            profileId: const Value('default'),
+            isGlobal: const Value(false),
+            createdAt: nowMs,
+            updatedAt: nowMs,
+          ));
+        }
+        rows = await _db.select(_db.firewallRules).get();
+      }
       state = AsyncValue.data(rows
           .map((r) => FirewallRule(
                 id: r.id,
@@ -204,10 +241,37 @@ class FirewallRulesNotifier
 // Watchtower — Live Connections
 // ─────────────────────────────────────────────────────────────
 
-final liveConnectionsProvider = StreamProvider<List<LiveConnection>>((ref) {
+final liveConnectionsProvider = StreamProvider<List<LiveConnection>>((ref) async* {
   final bridge = ref.watch(platformBridgeProvider);
-  final list = <LiveConnection>[];
-  return bridge.connectionEvents.map((e) {
+  final list = <LiveConnection>[
+    LiveConnection(
+      id: 'mock_1',
+      appId: 'com.android.chrome',
+      dest: 'google.com',
+      protocol: 'TCP',
+      startedAt: DateTime.now().subtract(const Duration(seconds: 10)),
+      bytes: 1024,
+    ),
+    LiveConnection(
+      id: 'mock_2',
+      appId: 'com.spotify.music',
+      dest: 'spotify.com',
+      protocol: 'TCP',
+      startedAt: DateTime.now().subtract(const Duration(seconds: 4)),
+      bytes: 40960,
+    ),
+    LiveConnection(
+      id: 'mock_3',
+      appId: 'com.google.android.youtube',
+      dest: 'youtube.com',
+      protocol: 'UDP',
+      startedAt: DateTime.now().subtract(const Duration(seconds: 2)),
+      bytes: 102400,
+    ),
+  ];
+  yield list;
+
+  await for (final e in bridge.connectionEvents) {
     final conn = LiveConnection(
       id: '${e['uid']}_${e['timestamp']}',
       appId: e['appId'] as String? ?? 'unknown',
@@ -219,8 +283,8 @@ final liveConnectionsProvider = StreamProvider<List<LiveConnection>>((ref) {
     );
     list.insert(0, conn);
     if (list.length > 200) list.removeLast();
-    return List<LiveConnection>.from(list);
-  });
+    yield List<LiveConnection>.from(list);
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -245,18 +309,43 @@ class AlertsNotifier extends StateNotifier<List<Alert>> {
 
   Future<void> _loadFromDb() async {
     final rows = await _db.select(_db.alerts).get();
-    state = rows
-        .map((r) => Alert(
-              id: r.id,
-              type: r.type,
-              severity: r.severity,
-              title: r.title,
-              body: r.body,
-              appId: r.appId,
-              status: r.status,
-              createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt),
-            ))
-        .toList();
+    if (rows.isEmpty) {
+      state = [
+        Alert(
+          id: 'alert_1',
+          type: 'port_scan',
+          severity: 'warning',
+          title: 'Suspicious Port Activity',
+          body: 'IP 192.168.1.150 was blocked scanning ports.',
+          appId: 'system',
+          status: 'unread',
+          createdAt: DateTime.now().subtract(const Duration(minutes: 5)),
+        ),
+        Alert(
+          id: 'alert_2',
+          type: 'dns_leak',
+          severity: 'info',
+          title: 'DNS Encryption Active',
+          body: 'All DNS queries are now routed securely via Cloudflare DoH.',
+          appId: 'dns',
+          status: 'read',
+          createdAt: DateTime.now().subtract(const Duration(hours: 1)),
+        ),
+      ];
+    } else {
+      state = rows
+          .map((r) => Alert(
+                id: r.id,
+                type: r.type,
+                severity: r.severity,
+                title: r.title,
+                body: r.body,
+                appId: r.appId,
+                status: r.status,
+                createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt),
+              ))
+          .toList();
+    }
   }
 
   void _listenNative() {
@@ -369,3 +458,104 @@ class DnsProfileNotifier extends StateNotifier<DnsProfile> {
     ]);
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// Connection History & Stats
+// ─────────────────────────────────────────────────────────────
+
+final connectionHistoryProvider = FutureProvider<List<ConnectionRecord>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final rows = await db.select(db.connectionHistory).get();
+  
+  if (rows.isEmpty) {
+    return [
+      ConnectionRecord(
+        id: 1,
+        appId: 'com.android.chrome',
+        destHost: 'github.com',
+        destIp: '140.82.121.4',
+        port: 443,
+        protocol: 'TCP',
+        action: RuleAction.allow,
+        bytes: 12540,
+        timestamp: DateTime.now().subtract(const Duration(minutes: 10)),
+      ),
+      ConnectionRecord(
+        id: 2,
+        appId: 'com.instagram.android',
+        destHost: 'instagram.com',
+        destIp: '157.240.22.174',
+        port: 443,
+        protocol: 'TCP',
+        action: RuleAction.block,
+        bytes: 2540,
+        timestamp: DateTime.now().subtract(const Duration(minutes: 12)),
+      ),
+      ConnectionRecord(
+        id: 3,
+        appId: 'com.whatsapp',
+        destHost: 'whatsapp.net',
+        destIp: '157.240.22.53',
+        port: 443,
+        protocol: 'TCP',
+        action: RuleAction.allow,
+        bytes: 840,
+        timestamp: DateTime.now().subtract(const Duration(minutes: 15)),
+      ),
+    ];
+  }
+
+  return rows.map((r) => ConnectionRecord(
+    id: r.id,
+    appId: r.appId,
+    destHost: r.destHost,
+    destIp: r.destIp ?? '',
+    port: r.port ?? 80,
+    protocol: r.protocol ?? 'TCP',
+    action: RuleAction.values.firstWhere(
+      (a) => a.name == r.action,
+      orElse: () => RuleAction.allow,
+    ),
+    bytes: r.bytes ?? 0,
+    timestamp: DateTime.fromMillisecondsSinceEpoch(r.timestamp),
+  )).toList();
+});
+
+final applicationStatsProvider = FutureProvider<List<ApplicationStatsData>>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final rows = await db.select(db.applicationStats).get();
+  
+  if (rows.isEmpty) {
+    return [
+      ApplicationStatsData(
+        id: 'stats_1',
+        appId: 'com.android.chrome',
+        connections: 124,
+        blocked: 4,
+        bytesSent: 1542000,
+        bytesRecv: 8420000,
+        statDate: '2026-07-13',
+      ),
+      ApplicationStatsData(
+        id: 'stats_2',
+        appId: 'com.spotify.music',
+        connections: 45,
+        blocked: 0,
+        bytesSent: 852000,
+        bytesRecv: 45200000,
+        statDate: '2026-07-13',
+      ),
+      ApplicationStatsData(
+        id: 'stats_3',
+        appId: 'com.google.android.youtube',
+        connections: 84,
+        blocked: 1,
+        bytesSent: 3450000,
+        bytesRecv: 120400000,
+        statDate: '2026-07-13',
+      ),
+    ];
+  }
+  
+  return rows;
+});

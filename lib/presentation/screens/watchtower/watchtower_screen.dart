@@ -195,29 +195,195 @@ class _LiveConnectionCard extends StatelessWidget {
 
 // ── History Tab ───────────────────────────────────────────────
 
-class _HistoryTab extends StatelessWidget {
+class _HistoryTab extends ConsumerWidget {
   @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Text(
-        'Connection history will appear here.\nData is stored locally on your device.',
-        style: TextStyle(color: NcColors.textSecondary),
-        textAlign: TextAlign.center,
+  Widget build(BuildContext context, WidgetRef ref) {
+    final historyAsync = ref.watch(connectionHistoryProvider);
+
+    return historyAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => Center(
+        child: Text('Error loading history: $e',
+            style: const TextStyle(color: NcColors.textSecondary)),
       ),
+      data: (records) {
+        if (records.isEmpty) {
+          return const Center(
+            child: Text(
+              'No connection history recorded yet.',
+              style: TextStyle(color: NcColors.textSecondary),
+            ),
+          );
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: records.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (ctx, i) {
+            final r = records[i];
+            final isBlocked = r.wasBlocked;
+
+            return Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: NcColors.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: NcColors.border),
+              ),
+              child: Row(
+                children: [
+                  Text(r.countryFlag, style: const TextStyle(fontSize: 20)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(r.appId,
+                            style: Theme.of(context).textTheme.titleMedium,
+                            overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 2),
+                        Text(
+                          '→ ${r.destHost}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: isBlocked
+                              ? NcColors.unprotected.withValues(alpha: 0.15)
+                              : NcColors.protected.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          isBlocked ? 'BLOCKED' : 'ALLOWED',
+                          style: TextStyle(
+                            color: isBlocked ? NcColors.unprotected : NcColors.protected,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _formatBytes(r.bytes ?? 0),
+                        style: const TextStyle(color: NcColors.textSecondary, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
+  }
+
+  String _formatBytes(int b) {
+    if (b < 1024) return '${b}B';
+    if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)}KB';
+    return '${(b / 1024 / 1024).toStringAsFixed(1)}MB';
   }
 }
 
 // ── Bandwidth Tab ─────────────────────────────────────────────
 
-class _BandwidthTab extends StatelessWidget {
+class _BandwidthTab extends ConsumerWidget {
   @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Text(
-        'Bandwidth usage by app will appear here.',
-        style: TextStyle(color: NcColors.textSecondary),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final statsAsync = ref.watch(applicationStatsProvider);
+
+    return statsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => Center(
+        child: Text('Error loading stats: $e',
+            style: const TextStyle(color: NcColors.textSecondary)),
       ),
+      data: (stats) {
+        if (stats.isEmpty) {
+          return const Center(
+            child: Text(
+              'No bandwidth stats available yet.',
+              style: TextStyle(color: NcColors.textSecondary),
+            ),
+          );
+        }
+
+        // Sort by total bytes descending
+        final sorted = List.from(stats)
+          ..sort((a, b) => (b.bytesSent + b.bytesRecv).compareTo(a.bytesSent + a.bytesRecv));
+
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: sorted.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (ctx, i) {
+            final s = sorted[i];
+            final totalBytes = s.bytesSent + s.bytesRecv;
+
+            return Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: NcColors.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: NcColors.border),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          s.appId,
+                          style: Theme.of(context).textTheme.titleMedium,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        _formatBytes(totalBytes),
+                        style: const TextStyle(
+                          color: NcColors.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '📤 Sent: ${_formatBytes(s.bytesSent)}',
+                        style: const TextStyle(color: NcColors.textSecondary, fontSize: 12),
+                      ),
+                      Text(
+                        '📥 Recv: ${_formatBytes(s.bytesRecv)}',
+                        style: const TextStyle(color: NcColors.textSecondary, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
+  }
+
+  String _formatBytes(int b) {
+    if (b < 1024) return '${b}B';
+    if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)}KB';
+    return '${(b / 1024 / 1024).toStringAsFixed(1)}MB';
   }
 }
