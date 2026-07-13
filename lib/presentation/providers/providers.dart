@@ -14,6 +14,8 @@ import '../../domain/enums/network_trust_level.dart';
 import '../../domain/enums/protection_mode.dart';
 import '../../domain/enums/rule_action.dart';
 import '../../domain/enums/rule_priority.dart';
+import '../../domain/entities/dns_profile.dart';
+import '../../domain/enums/dns_protocol.dart';
 import '../../platform/platform_channel_bridge.dart';
 
 // ─────────────────────────────────────────────────────────────
@@ -313,5 +315,57 @@ class LockdownNotifier extends StateNotifier<bool> {
   Future<void> deactivate() async {
     await _bridge.deactivateLockdown('User deactivated lockdown');
     state = false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// DNS Guard
+// ─────────────────────────────────────────────────────────────
+
+final dnsProfileProvider = StateNotifierProvider<DnsProfileNotifier, DnsProfile>((ref) {
+  return DnsProfileNotifier(ref);
+});
+
+class DnsProfileNotifier extends StateNotifier<DnsProfile> {
+  DnsProfileNotifier(this._ref) : super(DnsProfile.defaultProfile);
+  final Ref _ref;
+
+  Future<void> selectProvider(String name, String endpoint) async {
+    state = DnsProfile(
+      id: 'active_dns',
+      name: name,
+      provider: name.toLowerCase(),
+      protocol: DnsProtocol.doh,
+      endpoint: endpoint,
+      enabledCategories: state.enabledCategories,
+    );
+    await _ref.read(platformBridgeProvider).setDnsProfile({
+      'provider': state.provider,
+      'protocol': state.protocol.name,
+      'endpoint': state.endpoint,
+    });
+  }
+
+  Future<void> toggleCategory(String category) async {
+    final categories = List<String>.from(state.enabledCategories);
+    if (categories.contains(category)) {
+      categories.remove(category);
+    } else {
+      categories.add(category);
+    }
+    state = DnsProfile(
+      id: state.id,
+      name: state.name,
+      provider: state.provider,
+      protocol: state.protocol,
+      endpoint: state.endpoint,
+      enabledCategories: categories,
+    );
+    await _ref.read(platformBridgeProvider).updateBlocklists([
+      {
+        'category': category,
+        'domains': [], // Native implementation dynamically updates domains
+      }
+    ]);
   }
 }

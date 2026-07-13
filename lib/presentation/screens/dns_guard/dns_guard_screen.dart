@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../providers/providers.dart';
 import '../../../app/theme/app_theme.dart';
 
-class DnsGuardScreen extends StatelessWidget {
+class DnsGuardScreen extends ConsumerWidget {
   const DnsGuardScreen({super.key});
 
   static const _providers = [
-    ('Cloudflare', '🛡️', 'DoH · 1.1.1.1', true),
-    ('Quad9', '🔒', 'DoH · 9.9.9.9', false),
-    ('Google', '🌐', 'DoH · 8.8.8.8', false),
-    ('AdGuard', '🛡️', 'DoH · 94.140.14.14', false),
-    ('System Default', '⚙️', 'OS resolver', false),
-    ('Custom', '✏️', 'User-defined', false),
+    ('Cloudflare', '🛡️', 'DoH · 1.1.1.1', '1.1.1.1'),
+    ('Quad9', '🔒', 'DoH · 9.9.9.9', '9.9.9.9'),
+    ('Google', '🌐', 'DoH · 8.8.8.8', '8.8.8.8'),
+    ('AdGuard', '🛡️', 'DoH · 94.140.14.14', '94.140.14.14'),
+    ('System Default', '⚙️', 'OS resolver', 'system'),
+    ('Custom', '✏️', 'User-defined', 'custom'),
   ];
 
   static const _categories = [
@@ -27,7 +29,9 @@ class DnsGuardScreen extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dnsProfile = ref.watch(dnsProfileProvider);
+
     return Scaffold(
       backgroundColor: NcColors.bg,
       appBar: AppBar(title: const Text('DNS Guard')),
@@ -44,7 +48,10 @@ class DnsGuardScreen extends StatelessWidget {
                   name: p.$1,
                   emoji: p.$2,
                   subtitle: p.$3,
-                  isSelected: p.$4,
+                  isSelected: dnsProfile.name.toLowerCase() == p.$1.toLowerCase(),
+                  onTap: () => ref
+                      .read(dnsProfileProvider.notifier)
+                      .selectProvider(p.$1, p.$4),
                 ),
               ))),
 
@@ -149,42 +156,47 @@ class _DnsProviderTile extends StatelessWidget {
     required this.emoji,
     required this.subtitle,
     required this.isSelected,
+    required this.onTap,
   });
   final String name, emoji, subtitle;
   final bool isSelected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: isSelected
-            ? NcColors.primary.withValues(alpha: 0.08)
-            : NcColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isSelected ? NcColors.primary : NcColors.border,
-          width: isSelected ? 1.5 : 1,
-        ),
-      ),
-      child: Row(
-        children: [
-          Text(emoji, style: const TextStyle(fontSize: 22)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name, style: Theme.of(context).textTheme.titleMedium),
-                Text(subtitle,
-                    style: Theme.of(context).textTheme.bodyMedium),
-              ],
-            ),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? NcColors.primary.withValues(alpha: 0.08)
+              : NcColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? NcColors.primary : NcColors.border,
+            width: isSelected ? 1.5 : 1,
           ),
-          if (isSelected)
-            const Icon(Icons.check_circle,
-                color: NcColors.primary, size: 20),
-        ],
+        ),
+        child: Row(
+          children: [
+            Text(emoji, style: const TextStyle(fontSize: 22)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, style: Theme.of(context).textTheme.titleMedium),
+                  Text(subtitle,
+                      style: Theme.of(context).textTheme.bodyMedium),
+                ],
+              ),
+            ),
+            if (isSelected)
+              const Icon(Icons.check_circle,
+                  color: NcColors.primary, size: 20),
+          ],
+        ),
       ),
     );
   }
