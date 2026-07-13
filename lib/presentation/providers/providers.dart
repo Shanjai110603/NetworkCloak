@@ -521,13 +521,13 @@ final connectionHistoryProvider = FutureProvider<List<ConnectionRecord>>((ref) a
   )).toList();
 });
 
-final applicationStatsProvider = FutureProvider<List<ApplicationStatsData>>((ref) async {
+final applicationStatsProvider = FutureProvider<List<ApplicationStat>>((ref) async {
   final db = ref.watch(databaseProvider);
   final rows = await db.select(db.applicationStats).get();
   
   if (rows.isEmpty) {
     return [
-      ApplicationStatsData(
+      ApplicationStat(
         id: 'stats_1',
         appId: 'com.android.chrome',
         connections: 124,
@@ -536,7 +536,7 @@ final applicationStatsProvider = FutureProvider<List<ApplicationStatsData>>((ref
         bytesRecv: 8420000,
         statDate: '2026-07-13',
       ),
-      ApplicationStatsData(
+      ApplicationStat(
         id: 'stats_2',
         appId: 'com.spotify.music',
         connections: 45,
@@ -545,7 +545,7 @@ final applicationStatsProvider = FutureProvider<List<ApplicationStatsData>>((ref
         bytesRecv: 45200000,
         statDate: '2026-07-13',
       ),
-      ApplicationStatsData(
+      ApplicationStat(
         id: 'stats_3',
         appId: 'com.google.android.youtube',
         connections: 84,
