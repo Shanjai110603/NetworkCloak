@@ -50,10 +50,32 @@ object PlatformChannelHandler {
     private fun handleMethod(context: Context, call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "startFirewall" -> {
-                val intent = Intent(context, NetworkCloakVpnService::class.java)
-                    .putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START)
-                context.startService(intent)
-                result.success(null)
+                val activity = context as? android.app.Activity
+                
+                // 1. Request POST_NOTIFICATIONS at runtime on Android 13+ (API 33+)
+                // If not granted, the foreground notification will be silently blocked by the OS
+                if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                    context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    activity?.requestPermissions(
+                        arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                        1002
+                    )
+                }
+
+                // 2. Prepare VpnService dialog if not already authorized
+                val vpnIntent = VpnService.prepare(context)
+                if (vpnIntent != null) {
+                    activity?.startActivityForResult(vpnIntent, 1003)
+                    result.success(false) // Not started yet, waiting for result callback in MainActivity
+                } else {
+                    // Already prepared — start the service directly
+                    val intent = Intent(context, NetworkCloakVpnService::class.java).apply {
+                        putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START)
+                    }
+                    context.startService(intent)
+                    result.success(true)
+                }
             }
             "stopFirewall" -> {
                 val reason = call.argument<String>("reason") ?: "User stopped"

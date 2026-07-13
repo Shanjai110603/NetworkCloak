@@ -15,4 +15,15 @@ class MainActivity : FlutterActivity() {
             binaryMessenger = flutterEngine.dartExecutor.binaryMessenger,
         )
     }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 1003 && resultCode == RESULT_OK) {
+            // User approved the VPN permission dialog — start the service!
+            val intent = Intent(this, NetworkCloakVpnService::class.java).apply {
+                putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START)
+            }
+            startService(intent)
+        }
+    }
 }
