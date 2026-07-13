@@ -67,6 +67,8 @@ object PlatformChannelHandler {
                 @Suppress("UNCHECKED_CAST")
                 val rules = call.argument<List<Map<String, Any?>>>("rules") ?: emptyList()
                 RuleRepository.updateRules(rules)
+                // Update lastKnownContext so conditionsMatch() stays current
+                updateRuleContext(context)
                 refreshVpnService(context)
                 result.success(null)
             }
@@ -106,6 +108,25 @@ object PlatformChannelHandler {
                 result.success(null)
             }
             else -> result.notImplemented()
+        }
+    }
+
+    private fun updateRuleContext(context: Context) {
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                val info = ConnectivityMonitor.getCurrentNetworkInfo(context)
+                val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                val netType = when {
+                    info["isCellular"] as? Boolean == true -> "cellular"
+                    info["ssid"] != null                  -> "wifi"
+                    else                                   -> "unknown"
+                }
+                RuleRepository.lastKnownContext = RuleContext(
+                    networkType = netType,
+                    trustLevel  = info["trustLevel"] as? String ?: "unknown",
+                    currentHour = hour,
+                )
+            } catch (_: Exception) { }
         }
     }
 

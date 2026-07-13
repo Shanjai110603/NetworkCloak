@@ -42,3 +42,21 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // WorkManager — used for temporary rule expiry scheduling (Phase E/#13)
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // tun2socks-android — Option A TCP relay library
+    // Provides a correct TCP state machine that processes TUN packets and
+    // manages outbound sockets, avoiding a hand-rolled TCP implementation.
+    // The library is MIT licensed and used by production VPN apps.
+    // Note: if tun2socks-android is not available via Maven at your target version,
+    // integrate the .aar directly or use the lwIP-based alternative.
+    // TODO: uncomment once the specific version is pinned with your team:
+    // implementation("io.github.tun2socks:tun2socks-android:1.0.0")
+
+    // Test dependencies for Kotlin unit tests (Phase J)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("io.mockk:mockk:1.13.8")
+}

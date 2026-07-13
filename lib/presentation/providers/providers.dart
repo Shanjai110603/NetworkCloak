@@ -2,6 +2,7 @@
 // We import the database and hide its generated row types, using
 // domain entities throughout the app instead.
 import 'package:drift/drift.dart' show Value;
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/database/app_database.dart'
@@ -283,6 +284,7 @@ class FirewallRulesNotifier
           'action': rule.action.name,
           'priority': rule.priority.value,
           'isGlobal': rule.isGlobal,
+          'conditionsJson': rule.conditionsJson,
         });
       }
 
@@ -291,8 +293,9 @@ class FirewallRulesNotifier
           activeMode == ProtectionMode.lockdown;
 
       await _bridge.updateRules(serialized, blockLan: blockLan);
-    } catch (e) {
-      // Ignore
+    } catch (e, st) {
+      // Previously silently ignored — now logged so issues are visible
+      debugPrint('[NC] syncRulesToNative failed: $e\n$st');
     }
   }
 }
@@ -303,32 +306,8 @@ class FirewallRulesNotifier
 
 final liveConnectionsProvider = StreamProvider<List<LiveConnection>>((ref) async* {
   final bridge = ref.watch(platformBridgeProvider);
-  final list = <LiveConnection>[
-    LiveConnection(
-      id: 'mock_1',
-      appId: 'com.android.chrome',
-      dest: 'google.com',
-      protocol: 'TCP',
-      startedAt: DateTime.now().subtract(const Duration(seconds: 10)),
-      bytes: 1024,
-    ),
-    LiveConnection(
-      id: 'mock_2',
-      appId: 'com.spotify.music',
-      dest: 'spotify.com',
-      protocol: 'TCP',
-      startedAt: DateTime.now().subtract(const Duration(seconds: 4)),
-      bytes: 40960,
-    ),
-    LiveConnection(
-      id: 'mock_3',
-      appId: 'com.google.android.youtube',
-      dest: 'youtube.com',
-      protocol: 'UDP',
-      startedAt: DateTime.now().subtract(const Duration(seconds: 2)),
-      bytes: 102400,
-    ),
-  ];
+  // Start with empty state — no mock data
+  final list = <LiveConnection>[];
   yield list;
 
   await for (final e in bridge.connectionEvents) {
@@ -373,43 +352,19 @@ class AlertsNotifier extends StateNotifier<List<Alert>> {
 
   Future<void> _loadFromDb() async {
     final rows = await _db.select(_db.alerts).get();
-    if (rows.isEmpty) {
-      state = [
-        Alert(
-          id: 'alert_1',
-          type: 'port_scan',
-          severity: 'warning',
-          title: 'Suspicious Port Activity',
-          body: 'IP 192.168.1.150 was blocked scanning ports.',
-          appId: 'system',
-          status: 'unread',
-          createdAt: DateTime.now().subtract(const Duration(minutes: 5)),
-        ),
-        Alert(
-          id: 'alert_2',
-          type: 'dns_leak',
-          severity: 'info',
-          title: 'DNS Encryption Active',
-          body: 'All DNS queries are now routed securely via Cloudflare DoH.',
-          appId: 'dns',
-          status: 'read',
-          createdAt: DateTime.now().subtract(const Duration(hours: 1)),
-        ),
-      ];
-    } else {
-      state = rows
-          .map((r) => Alert(
-                id: r.id,
-                type: r.type,
-                severity: r.severity,
-                title: r.title,
-                body: r.body,
-                appId: r.appId,
-                status: r.status,
-                createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt),
-              ))
-          .toList();
-    }
+    // No mock data — show empty state until real alerts arrive
+    state = rows
+        .map((r) => Alert(
+              id: r.id,
+              type: r.type,
+              severity: r.severity,
+              title: r.title,
+              body: r.body,
+              appId: r.appId,
+              status: r.status,
+              createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt),
+            ))
+        .toList();
   }
 
   void _listenNative() {
@@ -531,6 +486,10 @@ class DnsProfileNotifier extends StateNotifier<DnsProfile> {
   final Ref _ref;
 
   Future<void> selectProvider(String name, String endpoint) async {
+    // Map display name/endpoint to DoH URL + hostname
+    // Endpoint should be an IP literal; derive doHHostname from provider name
+    final doHUrl = 'https://$endpoint/dns-query';
+    final doHHostname = _resolverHostname(name);
     state = DnsProfile(
       id: 'active_dns',
       name: name,
@@ -540,10 +499,18 @@ class DnsProfileNotifier extends StateNotifier<DnsProfile> {
       enabledCategories: state.enabledCategories,
     );
     await _ref.read(platformBridgeProvider).setDnsProfile({
-      'provider': state.provider,
-      'protocol': state.protocol.name,
-      'endpoint': state.endpoint,
+      'doHUrl': doHUrl,
+      'doHHostname': doHHostname,
     });
+  }
+
+  static String _resolverHostname(String providerName) {
+    final lower = providerName.toLowerCase();
+    if (lower.contains('cloudflare')) return 'cloudflare-dns.com';
+    if (lower.contains('google'))     return 'dns.google';
+    if (lower.contains('quad9'))      return 'dns.quad9.net';
+    if (lower.contains('nextdns'))    return 'dns.nextdns.io';
+    return 'cloudflare-dns.com'; // safe default
   }
 
   Future<void> toggleCategory(String category) async {
@@ -577,45 +544,7 @@ class DnsProfileNotifier extends StateNotifier<DnsProfile> {
 final connectionHistoryProvider = FutureProvider<List<ConnectionRecord>>((ref) async {
   final db = ref.watch(databaseProvider);
   final rows = await db.select(db.connectionHistory).get();
-  
-  if (rows.isEmpty) {
-    return [
-      ConnectionRecord(
-        id: 1,
-        appId: 'com.android.chrome',
-        destHost: 'github.com',
-        destIp: '140.82.121.4',
-        port: 443,
-        protocol: 'TCP',
-        action: RuleAction.allow,
-        bytes: 12540,
-        timestamp: DateTime.now().subtract(const Duration(minutes: 10)),
-      ),
-      ConnectionRecord(
-        id: 2,
-        appId: 'com.instagram.android',
-        destHost: 'instagram.com',
-        destIp: '157.240.22.174',
-        port: 443,
-        protocol: 'TCP',
-        action: RuleAction.block,
-        bytes: 2540,
-        timestamp: DateTime.now().subtract(const Duration(minutes: 12)),
-      ),
-      ConnectionRecord(
-        id: 3,
-        appId: 'com.whatsapp',
-        destHost: 'whatsapp.net',
-        destIp: '157.240.22.53',
-        port: 443,
-        protocol: 'TCP',
-        action: RuleAction.allow,
-        bytes: 840,
-        timestamp: DateTime.now().subtract(const Duration(minutes: 15)),
-      ),
-    ];
-  }
-
+  // No mock data — return empty list when DB is empty
   return rows.map((r) => ConnectionRecord(
     id: r.id,
     appId: r.appId,
@@ -635,38 +564,6 @@ final connectionHistoryProvider = FutureProvider<List<ConnectionRecord>>((ref) a
 final applicationStatsProvider = FutureProvider<List<ApplicationStat>>((ref) async {
   final db = ref.watch(databaseProvider);
   final rows = await db.select(db.applicationStats).get();
-  
-  if (rows.isEmpty) {
-    return [
-      ApplicationStat(
-        id: 'stats_1',
-        appId: 'com.android.chrome',
-        connections: 124,
-        blocked: 4,
-        bytesSent: 1542000,
-        bytesRecv: 8420000,
-        statDate: '2026-07-13',
-      ),
-      ApplicationStat(
-        id: 'stats_2',
-        appId: 'com.spotify.music',
-        connections: 45,
-        blocked: 0,
-        bytesSent: 852000,
-        bytesRecv: 45200000,
-        statDate: '2026-07-13',
-      ),
-      ApplicationStat(
-        id: 'stats_3',
-        appId: 'com.google.android.youtube',
-        connections: 84,
-        blocked: 1,
-        bytesSent: 3450000,
-        bytesRecv: 120400000,
-        statDate: '2026-07-13',
-      ),
-    ];
-  }
-  
+  // No mock data — return actual DB rows (empty list on fresh install)
   return rows;
 });

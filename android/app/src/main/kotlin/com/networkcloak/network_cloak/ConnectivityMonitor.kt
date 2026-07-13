@@ -32,14 +32,32 @@ object ConnectivityMonitor {
             override fun onAvailable(network: Network) {
                 CoroutineScope(Dispatchers.IO).launch {
                     val info = getCurrentNetworkInfo(context)
+                    val trustLevel = info["trustLevel"] as? String ?: "unknown"
+                    val isCellular = info["isCellular"] as? Boolean ?: false
+                    val ssid       = info["ssid"] as? String
+
                     NativeEventBus.postNetworkChanged(
-                        trustLevel = info["trustLevel"] as? String ?: "unknown",
-                        ssid       = info["ssid"] as? String,
-                        bssid      = info["bssid"] as? String,
-                        authType   = info["authType"] as? String,
-                        isRoaming  = info["isRoaming"] as? Boolean ?: false,
+                        trustLevel       = trustLevel,
+                        ssid             = ssid,
+                        bssid            = info["bssid"] as? String,
+                        authType         = info["authType"] as? String,
+                        isRoaming        = info["isRoaming"] as? Boolean ?: false,
                         hasCaptivePortal = info["hasCaptivePortal"] as? Boolean ?: false,
-                        isCellular = info["isCellular"] as? Boolean ?: false,
+                        isCellular       = isCellular,
+                    )
+
+                    // Keep RuleContext live so conditionsMatch() on global rules
+                    // uses the current network state between explicit updateRules() calls.
+                    val netType = when {
+                        isCellular    -> "cellular"
+                        ssid != null  -> "wifi"
+                        else          -> "unknown"
+                    }
+                    RuleRepository.lastKnownContext = RuleContext(
+                        networkType = netType,
+                        trustLevel  = trustLevel,
+                        currentHour = java.util.Calendar.getInstance()
+                                          .get(java.util.Calendar.HOUR_OF_DAY),
                     )
                 }
             }
@@ -47,12 +65,14 @@ object ConnectivityMonitor {
             override fun onLost(network: Network) {
                 NativeEventBus.postNetworkChanged(
                     trustLevel = "unknown",
-                    ssid = null,
-                    bssid = null,
-                    authType = null,
-                    isRoaming = false,
-                    hasCaptivePortal = false,
-                    isCellular = false,
+                    ssid = null, bssid = null, authType = null,
+                    isRoaming = false, hasCaptivePortal = false, isCellular = false,
+                )
+                RuleRepository.lastKnownContext = RuleContext(
+                    networkType = "unknown",
+                    trustLevel  = "unknown",
+                    currentHour = java.util.Calendar.getInstance()
+                                      .get(java.util.Calendar.HOUR_OF_DAY),
                 )
             }
         })
