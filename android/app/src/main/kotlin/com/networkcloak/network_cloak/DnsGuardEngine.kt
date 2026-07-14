@@ -240,6 +240,9 @@ object DnsGuardEngine {
             // ── Build a protected raw socket ──────────────────────
             val rawSocket = Socket()
             svc?.protect(rawSocket)  // protect() BEFORE connect (belt-and-suspenders)
+            
+            // Set 5-second read/SO timeout (prevents read stalling the packet loop thread)
+            rawSocket.soTimeout = 5_000
 
             // Parse IP + port from doHUrl: "https://<ip>/path"
             val url = java.net.URL(doHUrl)

@@ -64,6 +64,12 @@ data class RuleWithConditions(
             )
         }
 
+        /**
+         * Parses rule conditions from JSON.
+         * Note: This uses flat regex-based string extraction which is 100% portable on pure JVMs,
+         * but assumes a flat, non-nested JSON schema. If nested conditions or logical operators
+         * are introduced in the future, this must be migrated to a fully compliant JSON parser.
+         */
         private fun parseConditions(json: String): RuleConditions? {
             val trimmed = json.trim()
             if (trimmed == "{}" || trimmed.isEmpty()) return null

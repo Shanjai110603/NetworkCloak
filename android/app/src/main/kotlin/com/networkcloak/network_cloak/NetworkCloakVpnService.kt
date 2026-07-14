@@ -32,9 +32,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * DNS packets (UDP port 53) are intercepted by DnsGuardEngine for encrypted
  * DoH resolution and blocklist filtering.
  *
- * TCP forwarding: delegated to the tun2socks-android library (Option A).
- * The library manages the TCP state machine and calls processPacket() per flow
- * for policy decisions.
+ * TCP forwarding: Option B (UDP only, TCP Relay deferred) is active.
+ * Since the tun2socks-android library (Option A) has not been integrated yet,
+ * all TCP traffic is rejected with a TCP RST packet to prevent connection hangs.
+ * Go-based tun2socks-android integration will be implemented in a future sprint.
  *
  * Note: android:process=":vpn" has been removed from AndroidManifest.xml so
  * this service runs in the same process as MainActivity, making all object
@@ -280,21 +281,11 @@ class NetworkCloakVpnService : VpnService() {
         )
 
         // ── Enforcement ───────────────────────────────────────────
-        if (decision == "allow") {
-            when (protocol) {
-                OsConstants.IPPROTO_UDP -> forwardUdpPacket(packet, ihl, dstIp, dstPort)
-                OsConstants.IPPROTO_TCP -> {
-                    // TCP forwarding is managed by the tun2socks library (Option A).
-                    // The library intercepts TCP flows from the TUN fd before they
-                    // reach this function, so allowed TCP packets should not arrive
-                    // here in normal operation. If one does, pass it through.
-                    output.write(packet)
-                }
-                else -> output.write(packet)  // ICMP etc.
-            }
-        } else {
-            // Blocked: drop silently. For TCP, send RST for fast-fail UX.
-            if (protocol == OsConstants.IPPROTO_TCP && packet.size >= ihl + 20) {
+        if (protocol == OsConstants.IPPROTO_TCP) {
+            // Option B (UDP only, TCP Relay deferred) fallback: block all TCP flows by sending a TCP RST.
+            // This prevents the self-looping bug where allowed TCP packets are written back to the TUN,
+            // causing connections to hang indefinitely instead of failing cleanly.
+            if (packet.size >= ihl + 20) {
                 try {
                     val rst = PacketUtils.buildTcpRst(packet, ihl)
                     output.write(rst)
@@ -302,7 +293,27 @@ class NetworkCloakVpnService : VpnService() {
                     Log.w(TAG, "RST build failed: ${e.message}")
                 }
             }
-            // UDP and ICMP: drop silently
+            // Log block event for Watchtower
+            NativeEventBus.postConnectionEvent(
+                uid       = uid,
+                appId     = appId,
+                destHost  = dstIp,
+                destIp    = dstIp,
+                port      = dstPort,
+                protocol  = protocolStr,
+                bytes     = packet.size,
+                allowed   = false,
+            )
+            return
+        }
+
+        if (decision == "allow") {
+            when (protocol) {
+                OsConstants.IPPROTO_UDP -> forwardUdpPacket(packet, ihl, dstIp, dstPort)
+                else -> output.write(packet)  // ICMP etc.
+            }
+        } else {
+            // Blocked UDP/ICMP: drop silently
         }
 
         // ── Watchtower event ──────────────────────────────────────
