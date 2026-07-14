@@ -18,9 +18,113 @@ class _FirewallScreenState extends ConsumerState<FirewallScreen> {
 
   static const _filters = ['All', 'Blocked', 'Allowed', 'Ask', 'System'];
 
+  void _showBulkActions(BuildContext context, List<FirewallRule> filteredRules) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: NcColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                  child: Text(
+                    'Bulk Actions',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: NcColors.textPrimary,
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.check, color: NcColors.chipAllow),
+                  title: const Text('Allow All Filtered'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    for (final r in filteredRules) {
+                      if (r.appId != null) {
+                        await ref
+                            .read(firewallRulesProvider.notifier)
+                            .updateRuleAction(r.appId!, RuleAction.allow, profileId: r.profileId);
+                      }
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.block, color: NcColors.chipBlock),
+                  title: const Text('Block All Filtered'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    for (final r in filteredRules) {
+                      if (r.appId != null) {
+                        await ref
+                            .read(firewallRulesProvider.notifier)
+                            .updateRuleAction(r.appId!, RuleAction.block, profileId: r.profileId);
+                      }
+                    }
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.help_outline, color: NcColors.chipAsk),
+                  title: const Text('Reset All Filtered to Ask'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    for (final r in filteredRules) {
+                      if (r.appId != null) {
+                        await ref
+                            .read(firewallRulesProvider.notifier)
+                            .updateRuleAction(r.appId!, RuleAction.ask, profileId: r.profileId);
+                      }
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final rulesAsync = ref.watch(firewallRulesProvider);
+
+    List<FirewallRule> filtered = [];
+    if (rulesAsync.hasValue) {
+      final rules = rulesAsync.value!.cast<FirewallRule>();
+      final query = _searchCtrl.text.toLowerCase();
+      filtered = rules.where((r) {
+        if (query.isNotEmpty &&
+            !(r.appId?.toLowerCase().contains(query) ?? false)) {
+          return false;
+        }
+        if (_filter == 'Blocked' && !r.action.isBlocking) {
+          return false;
+        }
+        if (_filter == 'Allowed' && r.action != RuleAction.allow) {
+          return false;
+        }
+        if (_filter == 'Ask' && r.action != RuleAction.ask) {
+          return false;
+        }
+        final isSystem = r.appId == 'system_process' ||
+            (r.appId?.startsWith('com.android.') ?? false) ||
+            (r.appId?.startsWith('android.') ?? false);
+        if (_filter == 'System' && !isSystem) {
+          return false;
+        }
+        return true;
+      }).toList();
+    }
 
     return Scaffold(
       backgroundColor: NcColors.bg,
@@ -29,7 +133,7 @@ class _FirewallScreenState extends ConsumerState<FirewallScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.tune_outlined),
-            onPressed: () {},
+            onPressed: filtered.isNotEmpty ? () => _showBulkActions(context, filtered) : null,
             tooltip: 'Bulk Actions',
           )
         ],
@@ -86,24 +190,6 @@ class _FirewallScreenState extends ConsumerState<FirewallScreen> {
                         const TextStyle(color: NcColors.textSecondary)),
               ),
               data: (rulesData) {
-                final rules = rulesData.cast<FirewallRule>();
-                final query = _searchCtrl.text.toLowerCase();
-                final filtered = rules.where((r) {
-                  if (query.isNotEmpty &&
-                      !(r.appId?.toLowerCase().contains(query) ?? false)) {
-                    return false;
-                  }
-                  if (_filter == 'Blocked' && !r.action.isBlocking) {
-                    return false;
-                  }
-                  if (_filter == 'Allowed' && r.action != RuleAction.allow) {
-                    return false;
-                  }
-                  if (_filter == 'Ask' && r.action != RuleAction.ask) {
-                    return false;
-                  }
-                  return true;
-                }).toList();
 
                 if (filtered.isEmpty) {
                   return const Center(
@@ -137,15 +223,23 @@ class _FirewallScreenState extends ConsumerState<FirewallScreen> {
                     return _AppRuleTile(
                       appId: rule.appId ?? 'Unknown App',
                       action: rule.action,
+                      profileId: rule.profileId ?? 'default',
                       onAllow: () => ref
                           .read(firewallRulesProvider.notifier)
-                          .updateRuleAction(rule.appId ?? '', RuleAction.allow),
+                          .updateRuleAction(rule.appId ?? '', RuleAction.allow, profileId: rule.profileId),
                       onBlock: () => ref
                           .read(firewallRulesProvider.notifier)
-                          .updateRuleAction(rule.appId ?? '', RuleAction.block),
+                          .updateRuleAction(rule.appId ?? '', RuleAction.block, profileId: rule.profileId),
                       onAsk: () => ref
                           .read(firewallRulesProvider.notifier)
-                          .updateRuleAction(rule.appId ?? '', RuleAction.ask),
+                          .updateRuleAction(rule.appId ?? '', RuleAction.ask, profileId: rule.profileId),
+                      onProfileChanged: (newProfile) {
+                        ref.read(firewallRulesProvider.notifier).updateRuleAction(
+                              rule.appId ?? '',
+                              rule.action,
+                              profileId: newProfile,
+                            );
+                      },
                     );
                   },
                 );
@@ -162,16 +256,20 @@ class _AppRuleTile extends StatelessWidget {
   const _AppRuleTile({
     required this.appId,
     required this.action,
+    required this.profileId,
     required this.onAllow,
     required this.onBlock,
     required this.onAsk,
+    required this.onProfileChanged,
   });
 
   final String appId;
   final RuleAction action;
+  final String profileId;
   final VoidCallback onAllow;
   final VoidCallback onBlock;
   final VoidCallback onAsk;
+  final ValueChanged<String?> onProfileChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -196,7 +294,7 @@ class _AppRuleTile extends StatelessWidget {
                 color: NcColors.textMuted, size: 22),
           ),
           const SizedBox(width: 12),
-          // Name + chips
+          // Name + chips + profile dropdown
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -205,13 +303,46 @@ class _AppRuleTile extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleMedium,
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 6),
-                // Status chips
-                Wrap(
-                  spacing: 4,
+                Row(
                   children: [
-                    _StatusChip(label: 'Wi-Fi', action: action),
-                    _StatusChip(label: 'Cell', action: action),
-                    _StatusChip(label: 'BG', action: action),
+                    // Profile/Mode dropdown
+                    DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: profileId,
+                        isDense: true,
+                        dropdownColor: NcColors.surface,
+                        style: const TextStyle(
+                          color: NcColors.primary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        icon: const Icon(Icons.arrow_drop_down, color: NcColors.primary, size: 16),
+                        onChanged: onProfileChanged,
+                        items: const [
+                          DropdownMenuItem(value: 'default', child: Text('All Modes')),
+                          DropdownMenuItem(value: 'home', child: Text('Home')),
+                          DropdownMenuItem(value: 'work', child: Text('Work')),
+                          DropdownMenuItem(value: 'publicWifi', child: Text('Public Wi-Fi')),
+                          DropdownMenuItem(value: 'travel', child: Text('Travel')),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Status chips
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            _StatusChip(label: 'Wi-Fi', action: action),
+                            const SizedBox(width: 4),
+                            _StatusChip(label: 'Cell', action: action),
+                            const SizedBox(width: 4),
+                            _StatusChip(label: 'BG', action: action),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ],

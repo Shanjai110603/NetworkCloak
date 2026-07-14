@@ -137,6 +137,13 @@ class PlatformChannelBridge
         .map((e) => (e as Map)['isActive'] as bool? ?? false);
   }
 
+  /// VPN protection mode changes ("off", "quickBlockOnly", "full").
+  Stream<String> get protectionModeChanges {
+    return _events
+        .where((e) => (e as Map?)?['type'] == 'ProtectionStateChanged')
+        .map((e) => (e as Map)['mode'] as String? ?? 'off');
+  }
+
   /// Alerts fired from the native heuristic analysis engine.
   Stream<Map<String, dynamic>> get alertStream {
     return _events
@@ -149,5 +156,34 @@ class PlatformChannelBridge
     return _events
         .where((e) => (e as Map?)?['type'] == 'TempRuleExpired')
         .map((e) => Map<String, dynamic>.from(e as Map));
+  }
+
+  // ── Quick Block & Settings ───────────────────────────────
+
+  Future<void> updateQuickBlock(List<String> apps) async {
+    await _method.invokeMethod('updateQuickBlock', {'apps': apps});
+  }
+
+  Future<bool> startQuickBlock() async {
+    final result = await _method.invokeMethod<bool>('startQuickBlock');
+    return result ?? false;
+  }
+
+  Future<void> setAlertNotificationsEnabled(bool enabled) async {
+    await _method.invokeMethod('setAlertNotificationsEnabled', {'enabled': enabled});
+  }
+
+  Future<bool> getAlertNotificationsEnabled() async {
+    final result = await _method.invokeMethod<bool>('getAlertNotificationsEnabled');
+    return result ?? true;
+  }
+
+  Future<void> setRetentionDays(int days) async {
+    await _method.invokeMethod('setRetentionDays', {'days': days});
+  }
+
+  Future<int> getRetentionDays() async {
+    final result = await _method.invokeMethod<int>('getRetentionDays');
+    return result ?? 30;
   }
 }

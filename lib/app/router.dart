@@ -8,12 +8,53 @@ import '../presentation/screens/shield/shield_screen.dart';
 import '../presentation/screens/settings/settings_screen.dart';
 import '../presentation/screens/onboarding/onboarding_flow.dart';
 
+import '../presentation/screens/alerts/alerts_screen.dart';
+import '../presentation/screens/settings/cloak_coming_soon_screen.dart';
+import '../presentation/screens/settings/notifications_settings_screen.dart';
+import '../presentation/screens/settings/appearance_screen.dart';
+import '../presentation/screens/settings/data_retention_screen.dart';
+import '../presentation/screens/settings/advanced_settings_screen.dart';
+import '../presentation/screens/settings/about_screen.dart';
+import '../presentation/screens/quick_block/quick_block_screen.dart';
+
 final router = GoRouter(
   initialLocation: '/onboarding',
   routes: [
     GoRoute(
       path: '/onboarding',
       builder: (ctx, state) => const OnboardingFlow(),
+    ),
+    GoRoute(
+      path: '/alerts',
+      builder: (ctx, state) => const AlertsScreen(),
+    ),
+    GoRoute(
+      path: '/quick-block',
+      builder: (ctx, state) => const QuickBlockScreen(),
+    ),
+    GoRoute(
+      path: '/settings/cloak',
+      builder: (ctx, state) => const CloakComingSoonScreen(),
+    ),
+    GoRoute(
+      path: '/settings/notifications',
+      builder: (ctx, state) => const NotificationsSettingsScreen(),
+    ),
+    GoRoute(
+      path: '/settings/appearance',
+      builder: (ctx, state) => const AppearanceScreen(),
+    ),
+    GoRoute(
+      path: '/settings/data-retention',
+      builder: (ctx, state) => const DataRetentionScreen(),
+    ),
+    GoRoute(
+      path: '/settings/advanced',
+      builder: (ctx, state) => const AdvancedSettingsScreen(),
+    ),
+    GoRoute(
+      path: '/settings/about',
+      builder: (ctx, state) => const AboutScreen(),
     ),
     ShellRoute(
       builder: (ctx, state, child) => _MainShell(child: child),

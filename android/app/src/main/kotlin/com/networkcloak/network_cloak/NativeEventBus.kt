@@ -1,11 +1,25 @@
 package com.networkcloak.network_cloak
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.os.Build
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+
 /**
  * In-process event bus from native components → PlatformChannelHandler.
  * Native services (VPN, ConnectivityMonitor, WatchtowerEngine) call
  * [post] to push typed events to Flutter.
+ *
+ * Also provides system notification posting for real Android-tray alerts (D5).
  */
 object NativeEventBus {
+    private const val TAG = "NC-EventBus"
+    private const val ALERTS_CHANNEL_ID = "nc_alerts"
+    private var nextNotificationId = 5000
+
     private var listener: ((Map<String, Any?>) -> Unit)? = null
 
     fun register(onEvent: (Map<String, Any?>) -> Unit) {
@@ -19,6 +33,28 @@ object NativeEventBus {
     /** Post a typed event. Always safe to call from any thread. */
     fun post(event: Map<String, Any?>) {
         listener?.invoke(event)
+    }
+
+    // ── Notification Channel Setup ────────────────────────────
+
+    /**
+     * Creates the nc_alerts notification channel for real system-tray alerts.
+     * Must be called before postSystemNotification(). Safe to call multiple times.
+     */
+    fun createAlertsChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                ALERTS_CHANNEL_ID,
+                "Security Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerts for security events, anomalies, and blocked threats"
+                enableVibration(true)
+                setShowBadge(true)
+            }
+            context.getSystemService(NotificationManager::class.java)
+                ?.createNotificationChannel(channel)
+        }
     }
 
     // ── Typed helpers ────────────────────────────────────────
@@ -69,10 +105,16 @@ object NativeEventBus {
         ))
     }
 
-    fun postProtectionStateChanged(isActive: Boolean) {
+    /**
+     * Posts protection state change with tri-state VPN mode (D2).
+     * @param mode one of "off", "quickBlockOnly", "full"
+     */
+    fun postProtectionStateChanged(mode: String) {
         post(mapOf(
             "type"     to "ProtectionStateChanged",
-            "isActive" to isActive,
+            "mode"     to mode,
+            // Backward compat: isActive is true for any non-off mode
+            "isActive" to (mode != "off"),
         ))
     }
 
@@ -92,6 +134,49 @@ object NativeEventBus {
             "appId"     to appId,
             "timestamp" to System.currentTimeMillis(),
         ))
+    }
+
+    /**
+     * Posts a real Android system notification to the nc_alerts channel (D5).
+     * Only posts if alertNotificationsEnabled is true in SharedPreferences.
+     * Call createAlertsChannel() once before using this.
+     */
+    fun postSystemNotification(
+        context: Context,
+        title: String,
+        body: String,
+        severity: String,
+    ) {
+        val prefs = context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("alertNotificationsEnabled", true)) {
+            Log.d(TAG, "System notification suppressed (user disabled)")
+            return
+        }
+
+        val icon = when (severity) {
+            "critical" -> android.R.drawable.ic_dialog_alert
+            "warning"  -> android.R.drawable.ic_dialog_info
+            else       -> android.R.drawable.ic_dialog_info
+        }
+        val priority = when (severity) {
+            "critical" -> NotificationCompat.PRIORITY_HIGH
+            "warning"  -> NotificationCompat.PRIORITY_DEFAULT
+            else       -> NotificationCompat.PRIORITY_LOW
+        }
+
+        val notification = NotificationCompat.Builder(context, ALERTS_CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setSmallIcon(icon)
+            .setPriority(priority)
+            .setAutoCancel(true)
+            .build()
+
+        try {
+            NotificationManagerCompat.from(context).notify(nextNotificationId++, notification)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Notification permission not granted: ${e.message}")
+        }
     }
 
     fun postTempRuleExpired(ruleId: String, appId: String) {

@@ -99,20 +99,13 @@ class DnsGuardEngineTest {
         ))
 
         val packet = buildDnsPacket("ads.example.com")
-        val captured = ByteArrayOutputStream()
-        // Wrap in a FileOutputStream-like capture — we use a spy approach with a buffer
-        val outputBuffer = ByteArrayOutputStream()
+        var response: ByteArray = byteArrayOf()
 
-        // We drive interceptPacket via a custom FileOutputStream that writes to our buffer
-        val tempFile = java.io.File.createTempFile("dns_test_19", ".tmp").apply { deleteOnExit() }
-        val fakeOutput = object : FileOutputStream(tempFile) {
-            override fun write(b: ByteArray) { outputBuffer.write(b) }
-            override fun write(b: ByteArray, off: Int, len: Int) { outputBuffer.write(b, off, len) }
+        DnsGuardEngine.interceptPacket(packet) { bytes: ByteArray ->
+            response = bytes
+            Unit
         }
 
-        DnsGuardEngine.interceptPacket(packet, fakeOutput)
-
-        val response = outputBuffer.toByteArray()
         assertTrue("NXDOMAIN response must not be empty", response.isNotEmpty())
 
         // DNS payload starts at IP header (20) + UDP header (8) = offset 28
@@ -137,13 +130,11 @@ class DnsGuardEngineTest {
 
         val packet = buildDnsPacket("tracker.evil.com")
         var writeCount = 0
-        val tempFile = java.io.File.createTempFile("dns_test_20", ".tmp").apply { deleteOnExit() }
-        val fakeOutput = object : FileOutputStream(tempFile) {
-            override fun write(b: ByteArray) { writeCount++ }
-            override fun write(b: ByteArray, off: Int, len: Int) { writeCount++ }
-        }
 
-        DnsGuardEngine.interceptPacket(packet, fakeOutput)
+        DnsGuardEngine.interceptPacket(packet) { _: ByteArray ->
+            writeCount++
+            Unit
+        }
 
         assertEquals(
             "Blocked domain must result in exactly one write (NXDOMAIN) — not silence",
@@ -159,16 +150,13 @@ class DnsGuardEngineTest {
         ))
 
         val packet = buildDnsPacket("blocked.test")
-        val outputBuffer = ByteArrayOutputStream()
-        val tempFile = java.io.File.createTempFile("dns_test_21", ".tmp").apply { deleteOnExit() }
-        val fakeOutput = object : FileOutputStream(tempFile) {
-            override fun write(b: ByteArray) { outputBuffer.write(b) }
-            override fun write(b: ByteArray, off: Int, len: Int) { outputBuffer.write(b, off, len) }
+        var response: ByteArray = byteArrayOf()
+
+        DnsGuardEngine.interceptPacket(packet) { bytes: ByteArray ->
+            response = bytes
+            Unit
         }
 
-        DnsGuardEngine.interceptPacket(packet, fakeOutput)
-
-        val response = outputBuffer.toByteArray()
         assertTrue("Response must not be empty for checksum test", response.isNotEmpty())
 
         val ihl = (response[0].toInt() and 0x0F) * 4

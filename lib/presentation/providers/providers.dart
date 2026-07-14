@@ -1,7 +1,7 @@
 // Drift-generated classes have the same names as domain entities.
 // We import the database and hide its generated row types, using
 // domain entities throughout the app instead.
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -38,9 +38,9 @@ final platformBridgeProvider = Provider<PlatformChannelBridge>((ref) {
 // Protection State
 // ─────────────────────────────────────────────────────────────
 
-final protectionStateProvider = StreamProvider<bool>((ref) {
+final protectionStateProvider = StreamProvider<String>((ref) {
   final bridge = ref.watch(platformBridgeProvider);
-  return bridge.protectionStateChanges;
+  return bridge.protectionModeChanges;
 });
 
 final activeModeProvider = StateNotifierProvider<ModeNotifier, ProtectionMode>(
@@ -57,6 +57,9 @@ class ModeNotifier extends StateNotifier<ProtectionMode> {
     _ref.listen<AsyncValue<NetworkStatus>>(networkStatusProvider, (prev, next) async {
       final status = next.value;
       if (status == null) return;
+
+      final autoSwitch = _ref.read(autoSwitchEnabledProvider);
+      if (!autoSwitch) return; // Guard auto-switch (Item 7)
 
       final db = _ref.read(databaseProvider);
       final trustedRows = await db.select(db.trustedNetworks).get();
@@ -101,7 +104,12 @@ class ModeNotifier extends StateNotifier<ProtectionMode> {
         }
 
         await _ref.read(firewallRulesProvider.notifier).syncRulesToNative();
-        await _ref.read(platformBridgeProvider).startFirewall();
+        
+        // Only start/refresh VPN if full protection is already active
+        final currentMode = _ref.read(protectionStateProvider).valueOrNull ?? 'off';
+        if (currentMode == 'full') {
+          await _ref.read(platformBridgeProvider).startFirewall();
+        }
       }
     });
   }
@@ -109,7 +117,12 @@ class ModeNotifier extends StateNotifier<ProtectionMode> {
   Future<void> setMode(ProtectionMode mode) async {
     state = mode;
     await _ref.read(firewallRulesProvider.notifier).syncRulesToNative();
-    await _ref.read(platformBridgeProvider).startFirewall();
+    
+    // Only start/refresh VPN if full protection is already active
+    final currentMode = _ref.read(protectionStateProvider).valueOrNull ?? 'off';
+    if (currentMode == 'full') {
+      await _ref.read(platformBridgeProvider).startFirewall();
+    }
   }
 }
 
@@ -229,10 +242,13 @@ class FirewallRulesNotifier
 
   Future<void> refresh() => _load();
 
-  Future<void> updateRuleAction(String appId, RuleAction action) async {
-    final existing = await (_db.select(_db.firewallRules)
-          ..where((t) => t.appId.equals(appId)))
-        .getSingleOrNull();
+  Future<void> updateRuleAction(String appId, RuleAction action, {String? profileId}) async {
+    final query = _db.select(_db.firewallRules)
+      ..where((t) => t.appId.equals(appId));
+    if (profileId != null) {
+      query.where((t) => t.profileId.equals(profileId));
+    }
+    final existing = await query.getSingleOrNull();
 
     final nowMs = DateTime.now().millisecondsSinceEpoch;
 
@@ -251,7 +267,7 @@ class FirewallRulesNotifier
         action: action.name,
         priority: RulePriority.manualApp.value,
         conditionsJson: '{}',
-        profileId: const Value('default'),
+        profileId: Value(profileId ?? 'default'),
         isGlobal: const Value(false),
         createdAt: nowMs,
         updatedAt: nowMs,
@@ -436,10 +452,12 @@ class AlertsNotifier extends StateNotifier<List<Alert>> {
     });
   }
 
-  void markRead(String id) {
+  Future<void> markRead(String id) async {
     state = state
         .map((a) => a.id == id ? a.markRead() : a)
         .toList();
+    await (_db.update(_db.alerts)..where((t) => t.id.equals(id)))
+        .write(const AlertsCompanion(status: Value('read')));
   }
 
   void refresh() => _loadFromDb();
@@ -564,6 +582,206 @@ final connectionHistoryProvider = FutureProvider<List<ConnectionRecord>>((ref) a
 final applicationStatsProvider = FutureProvider<List<ApplicationStat>>((ref) async {
   final db = ref.watch(databaseProvider);
   final rows = await db.select(db.applicationStats).get();
-  // No mock data — return actual DB rows (empty list on fresh install)
   return rows;
 });
+
+final notificationsEnabledProvider = StateNotifierProvider<NotificationsEnabledNotifier, bool>((ref) {
+  return NotificationsEnabledNotifier(ref);
+});
+
+class NotificationsEnabledNotifier extends StateNotifier<bool> {
+  NotificationsEnabledNotifier(this._ref) : super(true) {
+    _init();
+  }
+  final Ref _ref;
+  Future<void> _init() async {
+    final val = await _ref.read(platformBridgeProvider).getAlertNotificationsEnabled();
+    state = val;
+  }
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _ref.read(platformBridgeProvider).setAlertNotificationsEnabled(enabled);
+  }
+}
+
+final retentionDaysProvider = StateNotifierProvider<RetentionDaysNotifier, int>((ref) {
+  return RetentionDaysNotifier(ref);
+});
+
+class RetentionDaysNotifier extends StateNotifier<int> {
+  RetentionDaysNotifier(this._ref) : super(30) {
+    _init();
+  }
+  final Ref _ref;
+  Future<void> _init() async {
+    final val = await _ref.read(platformBridgeProvider).getRetentionDays();
+    state = val;
+  }
+  Future<void> setDays(int days) async {
+    state = days;
+    await _ref.read(platformBridgeProvider).setRetentionDays(days);
+  }
+}
+
+final autoSwitchEnabledProvider = StateNotifierProvider<AutoSwitchEnabledNotifier, bool>((ref) {
+  return AutoSwitchEnabledNotifier();
+});
+
+class AutoSwitchEnabledNotifier extends StateNotifier<bool> {
+  AutoSwitchEnabledNotifier() : super(true);
+  void setEnabled(bool val) => state = val;
+}
+
+final roamingAutoBlockProvider = StateNotifierProvider<RoamingAutoBlockNotifier, bool>((ref) {
+  return RoamingAutoBlockNotifier();
+});
+
+class RoamingAutoBlockNotifier extends StateNotifier<bool> {
+  RoamingAutoBlockNotifier() : super(true);
+  void setEnabled(bool val) => state = val;
+}
+
+class QuickBlockState {
+  const QuickBlockState({required this.apps, required this.masterEnabled});
+  final Set<String> apps;
+  final bool masterEnabled;
+
+  QuickBlockState copyWith({Set<String>? apps, bool? masterEnabled}) {
+    return QuickBlockState(
+      apps: apps ?? this.apps,
+      masterEnabled: masterEnabled ?? this.masterEnabled,
+    );
+  }
+}
+
+final quickBlockProvider = StateNotifierProvider<QuickBlockNotifier, QuickBlockState>((ref) {
+  return QuickBlockNotifier(ref);
+});
+
+class QuickBlockNotifier extends StateNotifier<QuickBlockState> {
+  QuickBlockNotifier(this._ref) : super(const QuickBlockState(apps: {}, masterEnabled: false)) {
+    _init();
+  }
+  final Ref _ref;
+
+  Future<void> _init() async {
+    final db = _ref.read(databaseProvider);
+    final enabledSetting = await (db.select(db.settings)
+          ..where((t) => t.category.equals('quick_block') & t.key.equals('enabled')))
+        .getSingleOrNull();
+    final appsSetting = await (db.select(db.settings)
+          ..where((t) => t.category.equals('quick_block') & t.key.equals('apps')))
+        .getSingleOrNull();
+
+    final enabled = enabledSetting?.value == 'true';
+    final apps = appsSetting?.value.split(',').where((s) => s.isNotEmpty).toSet() ?? {};
+
+    state = QuickBlockState(apps: apps, masterEnabled: enabled);
+  }
+
+  Future<void> toggle(String appId) async {
+    final apps = Set<String>.from(state.apps);
+    if (apps.contains(appId)) {
+      apps.remove(appId);
+    } else {
+      apps.add(appId);
+    }
+    state = state.copyWith(apps: apps);
+
+    final db = _ref.read(databaseProvider);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.into(db.settings).insertOnConflictUpdate(SettingsCompanion(
+      category: const Value('quick_block'),
+      key: const Value('apps'),
+      value: Value(apps.join(',')),
+      valueType: const Value('string'),
+      updatedAt: Value(now),
+    ));
+
+    if (state.masterEnabled) {
+      await _ref.read(platformBridgeProvider).updateQuickBlock(apps.toList());
+    }
+
+    if (apps.isEmpty && state.masterEnabled) {
+      final currentMode = _ref.read(protectionStateProvider).valueOrNull ?? 'off';
+      if (currentMode == 'quickBlockOnly') {
+        await _ref.read(platformBridgeProvider).stopFirewall('No apps quick-blocked');
+      }
+    }
+  }
+
+  Future<void> setMasterEnabled(bool enabled) async {
+    state = state.copyWith(masterEnabled: enabled);
+
+    final db = _ref.read(databaseProvider);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await db.into(db.settings).insertOnConflictUpdate(SettingsCompanion(
+      category: const Value('quick_block'),
+      key: const Value('enabled'),
+      value: Value(enabled.toString()),
+      valueType: const Value('bool'),
+      updatedAt: Value(now),
+    ));
+
+    final bridge = _ref.read(platformBridgeProvider);
+    if (enabled) {
+      await bridge.updateQuickBlock(state.apps.toList());
+      if (state.apps.isNotEmpty) {
+        await bridge.startQuickBlock();
+      }
+    } else {
+      await bridge.updateQuickBlock([]);
+      final currentMode = _ref.read(protectionStateProvider).valueOrNull ?? 'off';
+      if (currentMode == 'quickBlockOnly') {
+        await bridge.stopFirewall('Quick Block disabled');
+      }
+    }
+  }
+}
+
+final protectionToggleProvider = StateNotifierProvider<ProtectionToggleNotifier, bool>((ref) {
+  return ProtectionToggleNotifier(ref);
+});
+
+class ProtectionToggleNotifier extends StateNotifier<bool> {
+  ProtectionToggleNotifier(this._ref) : super(false) {
+    _ref.listen<AsyncValue<String>>(protectionStateProvider, (prev, next) {
+      final mode = next.value;
+      if (mode != null) {
+        state = (mode == 'full');
+      }
+    });
+  }
+  final Ref _ref;
+
+  Future<void> toggle() async {
+    final bridge = _ref.read(platformBridgeProvider);
+    final rulesNotifier = _ref.read(firewallRulesProvider.notifier);
+    if (state) {
+      await bridge.stopFirewall('User disabled');
+      state = false;
+    } else {
+      await rulesNotifier.syncRulesToNative();
+      await bridge.startFirewall();
+      state = true;
+    }
+  }
+}
+
+final trustedNetworksProvider = StreamProvider<List<TrustedNetwork>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.select(db.trustedNetworks).watch().map((rows) => rows.map((r) => TrustedNetwork(
+        id: r.id,
+        ssid: r.ssid,
+        bssid: r.bssid,
+        trustLevel: NetworkTrustLevel.values.firstWhere(
+          (t) => t.name == r.trustLevel,
+          orElse: () => NetworkTrustLevel.trusted,
+        ),
+        profileId: r.profileId,
+      )).toList());
+});
+
+
+
+

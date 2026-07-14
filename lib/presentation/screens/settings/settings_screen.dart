@@ -1,11 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../../providers/providers.dart';
 import '../../../app/theme/app_theme.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final dnsProfile = ref.watch(dnsProfileProvider);
+    final autoSwitch = ref.watch(autoSwitchEnabledProvider);
+    final notificationsEnabled = ref.watch(notificationsEnabledProvider);
+    final retentionDays = ref.watch(retentionDaysProvider);
+
     return Scaffold(
       backgroundColor: NcColors.bg,
       appBar: AppBar(title: const Text('Settings')),
@@ -17,20 +25,20 @@ class SettingsScreen extends StatelessWidget {
               _SettingsTile(
                 icon: Icons.dns_outlined,
                 label: 'DNS Guard',
-                subtitle: 'Cloudflare DoH · 8 categories active',
-                onTap: () {},
+                subtitle: '${dnsProfile.name} · ${dnsProfile.enabledCategories.length} categories',
+                onTap: () => context.push('/dns'),
               ),
               _SettingsTile(
                 icon: Icons.shield_outlined,
                 label: 'Shield',
-                subtitle: 'Auto-switching on',
-                onTap: () {},
+                subtitle: 'Auto-switching ${autoSwitch ? 'on' : 'off'}',
+                onTap: () => context.push('/shield'),
               ),
               _SettingsTile(
                 icon: Icons.lock_outline,
                 label: 'Cloak',
-                subtitle: 'LAN block active',
-                onTap: () {},
+                subtitle: 'Coming in v2.0',
+                onTap: () => context.push('/settings/cloak'),
               ),
             ],
           ),
@@ -40,20 +48,20 @@ class SettingsScreen extends StatelessWidget {
               _SettingsTile(
                 icon: Icons.notifications_outlined,
                 label: 'Notifications',
-                subtitle: 'All alerts enabled',
-                onTap: () {},
+                subtitle: notificationsEnabled ? 'Alerts enabled' : 'Alerts disabled',
+                onTap: () => context.push('/settings/notifications'),
               ),
               _SettingsTile(
                 icon: Icons.palette_outlined,
                 label: 'Appearance',
-                subtitle: 'Dark mode',
-                onTap: () {},
+                subtitle: 'Stealth (Dark Mode)',
+                onTap: () => context.push('/settings/appearance'),
               ),
               _SettingsTile(
                 icon: Icons.storage_outlined,
                 label: 'Data & Retention',
-                subtitle: '30-day log retention',
-                onTap: () {},
+                subtitle: '$retentionDays-day log retention',
+                onTap: () => context.push('/settings/data-retention'),
               ),
             ],
           ),
@@ -63,14 +71,14 @@ class SettingsScreen extends StatelessWidget {
               _SettingsTile(
                 icon: Icons.developer_mode_outlined,
                 label: 'Advanced Settings',
-                subtitle: 'Debug mode, reset',
-                onTap: () {},
+                subtitle: 'Reset rules, debug logs',
+                onTap: () => context.push('/settings/advanced'),
               ),
               _SettingsTile(
                 icon: Icons.info_outline,
                 label: 'About',
                 subtitle: 'Network Cloak v1.0.0',
-                onTap: () {},
+                onTap: () => context.push('/settings/about'),
               ),
             ],
           ),

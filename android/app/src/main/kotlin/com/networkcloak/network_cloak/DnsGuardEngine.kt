@@ -2,7 +2,6 @@ package com.networkcloak.network_cloak
 
 import android.util.Log
 import java.io.ByteArrayOutputStream
-import java.io.FileOutputStream
 import java.lang.ref.WeakReference
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -147,7 +146,7 @@ object DnsGuardEngine {
      * Failing silently (not writing anything back) would cause the app to wait
      * for a timeout instead of receiving an instant refusal — that was bug #7.
      */
-    fun interceptPacket(packet: ByteArray, output: FileOutputStream) {
+    fun interceptPacket(packet: ByteArray, tunWriter: (ByteArray) -> Unit) {
         try {
             val ihl = (packet[0].toInt() and 0x0F) * 4
             val udpPayloadOffset = ihl + 8  // UDP header is 8 bytes
@@ -157,7 +156,7 @@ object DnsGuardEngine {
             val dnsPayload = packet.copyOfRange(udpPayloadOffset, packet.size)
             val domain = parseDnsQuery(dnsPayload) ?: run {
                 // Unparseable DNS query — forward as-is to upstream
-                forwardDnsQuery(dnsPayload, output, packet, ihl)
+                forwardDnsQuery(dnsPayload, tunWriter, packet, ihl)
                 return
             }
 
@@ -175,16 +174,16 @@ object DnsGuardEngine {
                 // Write a proper NXDOMAIN response — not silence.
                 // Silence would make the app wait for a timeout (bug #7).
                 val nxPacket = buildNxdomainPacket(packet, ihl, dnsPayload)
-                output.write(nxPacket)
+                tunWriter(nxPacket)
                 return
             }
 
             // Allowed domain — forward via DoH
-            forwardDnsQuery(dnsPayload, output, packet, ihl)
+            forwardDnsQuery(dnsPayload, tunWriter, packet, ihl)
 
         } catch (e: Exception) {
             Log.w(TAG, "DNS interception error: ${e.message}")
-            output.write(packet)  // fail open on unexpected error
+            tunWriter(packet)  // fail open on unexpected error
         }
     }
 
@@ -230,7 +229,7 @@ object DnsGuardEngine {
      */
     private fun forwardDnsQuery(
         dnsPayload: ByteArray,
-        tunOutput: FileOutputStream,
+        tunWriter: (ByteArray) -> Unit,
         originalPacket: ByteArray,
         ihl: Int,
     ) {
@@ -257,6 +256,11 @@ object DnsGuardEngine {
                 rawSocket, host, port, true
             ) as SSLSocket
             sslSocket.startHandshake()
+
+            // Belt-and-suspenders: set SO_TIMEOUT on the SSL socket too.
+            // rawSocket.soTimeout (line 245) may not reliably propagate through
+            // the SSLSocket wrapper on all JVM implementations.
+            sslSocket.soTimeout = 5_000
 
             // Verify cert against the pinned hostname — not the IP literal.
             // Never skip: unconditional "return true" would allow MITM.
@@ -294,7 +298,7 @@ object DnsGuardEngine {
 
             // Reconstruct IP+UDP packet for the TUN interface
             val responsePacket = buildDnsResponsePacket(originalPacket, ihl, dnsResponse)
-            tunOutput.write(responsePacket)
+            tunWriter(responsePacket)
 
         } catch (e: Exception) {
             Log.w(TAG, "DoH forward failed: ${e.message}")

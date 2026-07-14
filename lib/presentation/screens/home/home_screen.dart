@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../providers/providers.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../domain/enums/network_trust_level.dart';
@@ -17,7 +18,7 @@ class HomeScreen extends ConsumerWidget {
     final List<Alert> alerts = ref.watch(alertsProvider);
     final lockdown = ref.watch(lockdownProvider);
 
-    final isProtected = protectionAsync.valueOrNull ?? false;
+    final protectionMode = protectionAsync.valueOrNull ?? 'off';
     final network = networkAsync.valueOrNull;
 
     return Scaffold(
@@ -29,9 +30,11 @@ class HomeScreen extends ConsumerWidget {
             top: -100,
             left: -100,
             child: _GlowCircle(
-              color: isProtected
+              color: protectionMode == 'full'
                   ? NcColors.protected.withValues(alpha: 0.12)
-                  : NcColors.unprotected.withValues(alpha: 0.10),
+                  : protectionMode == 'quickBlockOnly'
+                      ? NcColors.partial.withValues(alpha: 0.12)
+                      : NcColors.unprotected.withValues(alpha: 0.10),
               size: 400,
             ),
           ),
@@ -81,9 +84,12 @@ class HomeScreen extends ConsumerWidget {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 20, vertical: 24),
                     child: Center(
-                      child: _ShieldWidget(
-                        isProtected: isProtected,
-                        trust: network?.trustLevel ?? NetworkTrustLevel.unknown,
+                      child: GestureDetector(
+                        onTap: () => ref.read(protectionToggleProvider.notifier).toggle(),
+                        child: _ShieldWidget(
+                          mode: protectionMode,
+                          trust: network?.trustLevel ?? NetworkTrustLevel.unknown,
+                        ),
                       ),
                     ),
                   ),
@@ -120,6 +126,16 @@ class HomeScreen extends ConsumerWidget {
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
                     child: _LivePulseCard(),
+                  ),
+                ),
+
+                const SliverToBoxAdapter(child: SizedBox(height: 16)),
+
+                // ── Quick Block ───────────────────────────
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _QuickBlockCard(),
                   ),
                 ),
 
@@ -178,8 +194,8 @@ class HomeScreen extends ConsumerWidget {
 // ── Shield Widget ──────────────────────────────────────────────
 
 class _ShieldWidget extends StatefulWidget {
-  const _ShieldWidget({required this.isProtected, required this.trust});
-  final bool isProtected;
+  const _ShieldWidget({required this.mode, required this.trust});
+  final String mode;
   final NetworkTrustLevel trust;
 
   @override
@@ -213,8 +229,11 @@ class _ShieldWidgetState extends State<_ShieldWidget>
     if (widget.trust == NetworkTrustLevel.hostile) {
       return NcColors.hostile;
     }
-    if (!widget.isProtected) {
+    if (widget.mode == 'off') {
       return NcColors.unprotected;
+    }
+    if (widget.mode == 'quickBlockOnly') {
+      return NcColors.partial;
     }
     if (widget.trust == NetworkTrustLevel.unknown ||
         widget.trust == NetworkTrustLevel.publicWifi) {
@@ -227,8 +246,11 @@ class _ShieldWidgetState extends State<_ShieldWidget>
     if (widget.trust == NetworkTrustLevel.hostile) {
       return 'Threat Detected';
     }
-    if (!widget.isProtected) {
-      return 'Not Protected';
+    if (widget.mode == 'off') {
+      return 'Protection Off';
+    }
+    if (widget.mode == 'quickBlockOnly') {
+      return 'Quick Block Active';
     }
     if (widget.trust == NetworkTrustLevel.publicWifi) {
       return 'Shield Active';
@@ -264,7 +286,7 @@ class _ShieldWidgetState extends State<_ShieldWidget>
               ],
             ),
             child: Icon(
-              widget.isProtected ? Icons.shield : Icons.shield_outlined,
+              widget.mode != 'off' ? Icons.shield : Icons.shield_outlined,
               size: 80,
               color: _shieldColor,
             ),
@@ -486,7 +508,7 @@ class _AlertBadge extends StatelessWidget {
         IconButton(
           icon: const Icon(Icons.notifications_outlined),
           color: NcColors.textPrimary,
-          onPressed: () {},
+          onPressed: () => context.push('/alerts'),
         ),
         if (count > 0)
           Positioned(
@@ -680,6 +702,65 @@ class _GlowCircle extends StatelessWidget {
           colors: [color, Colors.transparent],
           stops: const [0, 1],
         ),
+      ),
+    );
+  }
+}
+
+class _QuickBlockCard extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final quickBlockState = ref.watch(quickBlockProvider);
+    final count = quickBlockState.apps.length;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: NcColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: NcColors.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: NcColors.chipBlock.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.block, color: NcColors.chipBlock, size: 24),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Quick Block',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: NcColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  quickBlockState.masterEnabled
+                      ? 'Active: $count apps blocked'
+                      : '$count apps configured',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: NcColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: () => context.push('/quick-block'),
+            child: const Text('Manage', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
       ),
     );
   }

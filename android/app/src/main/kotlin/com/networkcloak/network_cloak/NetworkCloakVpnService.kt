@@ -12,6 +12,8 @@ import android.os.ParcelFileDescriptor
 import android.system.OsConstants
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
@@ -19,6 +21,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -32,10 +35,16 @@ import java.util.concurrent.atomic.AtomicBoolean
  * DNS packets (UDP port 53) are intercepted by DnsGuardEngine for encrypted
  * DoH resolution and blocklist filtering.
  *
- * TCP forwarding: Option B (UDP only, TCP Relay deferred) is active.
- * Since the tun2socks-android library (Option A) has not been integrated yet,
- * all TCP traffic is rejected with a TCP RST packet to prevent connection hangs.
- * Go-based tun2socks-android integration will be implemented in a future sprint.
+ * TCP forwarding: Option B is active — all TCP traffic is rejected with a
+ * TCP RST packet (correct checksums + SEQ/ACK per RFC 793 §3.4). This
+ * prevents the self-loop bug where writing a TCP packet back to the TUN fd
+ * causes it to re-enter the tunnel and hang indefinitely. TCP relay requires
+ * building tun2socks from source (Go + gomobile bind → .aar); there is no
+ * Maven dependency for this — it must be done in a future sprint.
+ *
+ * Threading (D1): UDP/DNS forwarding runs on a bounded 4-thread coroutine
+ * pool. All writes to the TUN fd go through a single-writer channel to
+ * prevent interleaved/corrupted writes from concurrent threads.
  *
  * Note: android:process=":vpn" has been removed from AndroidManifest.xml so
  * this service runs in the same process as MainActivity, making all object
@@ -48,17 +57,41 @@ class NetworkCloakVpnService : VpnService() {
         const val ACTION_KEY   = "action"
         const val ACTION_START = "start"
         const val ACTION_STOP  = "stop"
+        const val ACTION_START_QUICK_BLOCK = "start_quick_block"
 
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID      = "nc_protection"
 
-        @Volatile var isRunning: Boolean = false
+        /** Tri-state VPN mode (D2): OFF, QUICK_BLOCK, or FULL */
+        @Volatile var currentMode: VpnMode = VpnMode.OFF
             private set
+
+        /** Backward compat convenience */
+        val isRunning: Boolean get() = currentMode != VpnMode.OFF
+    }
+
+    /** Tri-state mode for distinguishing Quick Block from full protection (D2) */
+    enum class VpnMode {
+        OFF,
+        QUICK_BLOCK,
+        FULL;
+
+        fun toEventString(): String = when (this) {
+            OFF -> "off"
+            QUICK_BLOCK -> "quickBlockOnly"
+            FULL -> "full"
+        }
     }
 
     private val running       = AtomicBoolean(false)
     private var tunInterface: ParcelFileDescriptor? = null
     private var workerThread: Thread? = null
+
+    // ── Coroutine infrastructure (D1) ─────────────────────────────
+    private val ioDispatcher = Executors.newFixedThreadPool(4).asCoroutineDispatcher()
+    private val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
+    // Single-writer channel: all threads send packets here; one writer drains to TUN
+    private val tunWriteChannel = Channel<ByteArray>(capacity = 256)
 
     // ── Lifecycle ─────────────────────────────────────────────────
 
@@ -73,8 +106,12 @@ class NetworkCloakVpnService : VpnService() {
                 configureVpn()
                 START_STICKY
             }
+            ACTION_START_QUICK_BLOCK -> {
+                startVpn(VpnMode.QUICK_BLOCK)
+                START_STICKY
+            }
             else -> {
-                startVpn()
+                startVpn(VpnMode.FULL)
                 START_STICKY
             }
         }
@@ -130,10 +167,12 @@ class NetworkCloakVpnService : VpnService() {
         }
     }
 
-    private fun startVpn() {
+    private fun startVpn(mode: VpnMode = VpnMode.FULL) {
         if (running.getAndSet(true)) return
 
         createNotificationChannel()
+        // Create the nc_alerts channel for system notifications (D5)
+        NativeEventBus.createAlertsChannel(this)
         startForeground(NOTIFICATION_ID, buildNotification())
 
         configureVpn()
@@ -144,13 +183,15 @@ class NetworkCloakVpnService : VpnService() {
             return
         }
 
-        isRunning = true
+        currentMode = mode
         persistProtectionState(active = true)
 
-        // Attach DnsGuardEngine before starting the packet loop
-        DnsGuardEngine.attach(this)
+        // Attach DnsGuardEngine only in FULL mode — Quick Block skips DNS interception
+        if (mode == VpnMode.FULL) {
+            DnsGuardEngine.attach(this)
+        }
 
-        NativeEventBus.postProtectionStateChanged(true)
+        NativeEventBus.postProtectionStateChanged(mode.toEventString())
 
         workerThread = Thread({ packetLoop() }, "NC-PacketLoop").also { it.start() }
     }
@@ -160,17 +201,35 @@ class NetworkCloakVpnService : VpnService() {
         Log.i(TAG, "Stopping VPN: $reason")
 
         workerThread?.interrupt()
-        DnsGuardEngine.detach()
+
+        // Cancel coroutine scope and close TUN writer channel
+        scope.coroutineContext.cancelChildren()
+        tunWriteChannel.close()
+
+        if (currentMode == VpnMode.FULL) {
+            DnsGuardEngine.detach()
+        }
         RuleRepository.clearSessionRules()  // P3 session rules end with the VPN session
 
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null
-        isRunning = false
+        currentMode = VpnMode.OFF
 
         persistProtectionState(active = false)
-        NativeEventBus.postProtectionStateChanged(false)
+        NativeEventBus.postProtectionStateChanged(VpnMode.OFF.toEventString())
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    /**
+     * Stops VPN only if running in QUICK_BLOCK mode and the quick-block list
+     * is now empty. Called from PlatformChannelHandler when the last app is
+     * un-blocked in Quick Block mode.
+     */
+    fun stopQuickBlockIfEmpty() {
+        if (currentMode == VpnMode.QUICK_BLOCK && RuleRepository.isQuickBlockEmpty()) {
+            stopVpn("Quick Block list empty")
+        }
     }
 
     /** Persists protection state for BootReceiver to read on next device start. */
@@ -185,12 +244,13 @@ class NetworkCloakVpnService : VpnService() {
 
     /**
      * Reads raw IP packets from the TUN fd and dispatches each packet:
-     *   - UDP port 53 → DnsGuardEngine (DoH interception)
-     *   - All others  → processPacket() for policy evaluation and forwarding
+     *   - UDP port 53 → DnsGuardEngine (DoH interception) — FULL mode only
+     *   - TCP         → RST (Option B — no tun2socks integration)
+     *   - UDP/ICMP    → processPacket() for policy evaluation and forwarding
      *
-     * TCP forwarding (Option A) is managed by the tun2socks library integration.
-     * The library intercepts TCP flows and calls back into this class for per-flow
-     * policy decisions while managing the TCP state machine internally.
+     * UDP/DNS forwarding runs on a bounded 4-thread coroutine pool (D1).
+     * All writes back to the TUN fd go through a single-writer channel
+     * to prevent interleaved/corrupted writes from concurrent threads.
      */
     private fun packetLoop() {
         val tun    = tunInterface ?: return
@@ -198,7 +258,18 @@ class NetworkCloakVpnService : VpnService() {
         val output = FileOutputStream(tun.fileDescriptor)
         val buffer = ByteBuffer.allocate(32767)
 
-        Log.i(TAG, "Packet loop started")
+        // Start the single TUN writer coroutine (D1)
+        scope.launch {
+            for (packet in tunWriteChannel) {
+                try {
+                    output.write(packet)
+                } catch (e: Exception) {
+                    if (running.get()) Log.w(TAG, "TUN write failed: ${e.message}")
+                }
+            }
+        }
+
+        Log.i(TAG, "Packet loop started (mode=${currentMode})")
 
         while (running.get() && !Thread.currentThread().isInterrupted) {
             try {
@@ -209,7 +280,7 @@ class NetworkCloakVpnService : VpnService() {
                 buffer.limit(bytes)
                 val packet = buffer.array().copyOf(bytes)
 
-                processPacket(packet, output)
+                processPacket(packet)
             } catch (e: InterruptedException) {
                 break
             } catch (e: Exception) {
@@ -220,13 +291,13 @@ class NetworkCloakVpnService : VpnService() {
         Log.i(TAG, "Packet loop stopped")
     }
 
-    private fun processPacket(packet: ByteArray, output: FileOutputStream) {
+    private fun processPacket(packet: ByteArray) {
         if (packet.size < 20) return
 
         val version = (packet[0].toInt() and 0xF0) shr 4
         if (version != 4) {
             // Pass IPv6 through — IPv6 rules deferred to Phase 4
-            output.write(packet)
+            tunWriteChannel.trySend(packet)
             return
         }
 
@@ -236,7 +307,7 @@ class NetworkCloakVpnService : VpnService() {
         val dstIp    = formatIp(packet, 16)
 
         val ihl = (packet[0].toInt() and 0x0F) * 4
-        if (packet.size < ihl + 4) { output.write(packet); return }
+        if (packet.size < ihl + 4) { tunWriteChannel.trySend(packet); return }
 
         val srcPort = when (protocol) {
             OsConstants.IPPROTO_TCP, OsConstants.IPPROTO_UDP ->
@@ -257,8 +328,13 @@ class NetworkCloakVpnService : VpnService() {
         }
 
         // ── DNS interception (port 53) ────────────────────────────
-        if (protocol == OsConstants.IPPROTO_UDP && dstPort == 53) {
-            DnsGuardEngine.interceptPacket(packet, output)
+        // Only intercept DNS in FULL mode; Quick Block mode forwards normally
+        if (protocol == OsConstants.IPPROTO_UDP && dstPort == 53 && currentMode == VpnMode.FULL) {
+            scope.launch {
+                DnsGuardEngine.interceptPacket(packet) { responsePacket ->
+                    tunWriteChannel.trySend(responsePacket)
+                }
+            }
             return
         }
 
@@ -281,19 +357,23 @@ class NetworkCloakVpnService : VpnService() {
         )
 
         // ── Enforcement ───────────────────────────────────────────
+
+        // TCP: Option B active — ALL TCP is rejected with RST regardless of
+        // allow/block decision. There is no TCP forwarding capability without
+        // tun2socks .aar integration (future sprint). Without this guard, an
+        // "allowed" TCP packet would be written back to the TUN fd, re-enter
+        // the tunnel, and loop indefinitely — the root cause of the WhatsApp/
+        // Chrome/YouTube hang bug.
         if (protocol == OsConstants.IPPROTO_TCP) {
-            // Option B (UDP only, TCP Relay deferred) fallback: block all TCP flows by sending a TCP RST.
-            // This prevents the self-looping bug where allowed TCP packets are written back to the TUN,
-            // causing connections to hang indefinitely instead of failing cleanly.
             if (packet.size >= ihl + 20) {
                 try {
                     val rst = PacketUtils.buildTcpRst(packet, ihl)
-                    output.write(rst)
+                    tunWriteChannel.trySend(rst)
                 } catch (e: Exception) {
                     Log.w(TAG, "RST build failed: ${e.message}")
                 }
             }
-            // Log block event for Watchtower
+            // Log as blocked for Watchtower — TCP cannot be forwarded
             NativeEventBus.postConnectionEvent(
                 uid       = uid,
                 appId     = appId,
@@ -309,8 +389,22 @@ class NetworkCloakVpnService : VpnService() {
 
         if (decision == "allow") {
             when (protocol) {
-                OsConstants.IPPROTO_UDP -> forwardUdpPacket(packet, ihl, dstIp, dstPort)
-                else -> output.write(packet)  // ICMP etc.
+                OsConstants.IPPROTO_UDP -> {
+                    // Forward UDP on the coroutine pool (D1) — not the packet loop thread
+                    scope.launch {
+                        forwardUdpPacket(packet, ihl, dstIp, dstPort)
+                    }
+                }
+                // Defensive: TCP is already handled above and will never reach here.
+                // This explicit branch documents that and prevents any future
+                // refactoring from accidentally reintroducing the self-loop bug.
+                OsConstants.IPPROTO_TCP -> {
+                    // Unreachable: all TCP exits via the RST block above.
+                    // If this somehow executes, do NOT write the packet back to
+                    // the TUN fd — that would cause the self-loop hang.
+                    Log.e(TAG, "BUG: TCP reached allow-branch — should be unreachable")
+                }
+                else -> tunWriteChannel.trySend(packet)  // ICMP etc.
             }
         } else {
             // Blocked UDP/ICMP: drop silently

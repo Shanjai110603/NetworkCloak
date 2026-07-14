@@ -138,6 +138,9 @@ object RuleRepository {
 
     private const val TAG = "NC-Rules"
 
+    // ── P0: Quick Block (unconditional per-app kill switch) ───
+    private val quickBlockedApps = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     // ── P1: Lockdown ──────────────────────────────────────────────
     @Volatile var isLockdownActive: Boolean = false
         private set
@@ -162,6 +165,11 @@ object RuleRepository {
 
     // ── Blocked-app cache (invalidated on updateRules) ────────────
     @Volatile private var cachedBlockedApps: List<String>? = null
+
+    // ── P1.5: Global LAN block (Public Wi-Fi / Travel modes) ────
+    // Wins unconditionally over per-app allowLanOnly (D4) — on untrusted
+    // networks, LAN devices ARE the threat model.
+    @Volatile var blockLanTraffic: Boolean = false
 
     // ── Last-known network context (updated by ConnectivityMonitor via Platform) ──
     @Volatile var lastKnownContext: RuleContext = RuleContext(
@@ -264,6 +272,21 @@ object RuleRepository {
         sessionRules.clear()
     }
 
+    // ── Quick Block API ───────────────────────────────────────────
+
+    /**
+     * Replaces the quick-block app set (P0). Invalidates the blocked-app
+     * cache so getBlockedAppIds() returns fresh results (D3).
+     */
+    fun updateQuickBlockList(apps: List<String>) {
+        quickBlockedApps.clear()
+        quickBlockedApps.addAll(apps)
+        cachedBlockedApps = null  // D3: invalidate cache
+        Log.i(TAG, "Quick Block list updated: ${quickBlockedApps.size} apps")
+    }
+
+    fun isQuickBlockEmpty(): Boolean = quickBlockedApps.isEmpty()
+
     // ── Blocked-app list (used by VPN builder, cached) ────────────
 
     /**
@@ -308,9 +331,23 @@ object RuleRepository {
         context: RuleContext = lastKnownContext,
     ): String {
 
+        // P0: Quick Block — unconditional per-app kill switch.
+        // Above even Lockdown because the user explicitly wants this app dead.
+        if (quickBlockedApps.contains(appId)) {
+            return "block"
+        }
+
         // P1: Lockdown — unconditional, never expires
         if (isLockdownActive) {
             return if (lockdownAllowlist.contains(appId)) "allow" else "block"
+        }
+
+        // P1.5: Global LAN block (Public Wi-Fi / Travel / Lockdown modes).
+        // Wins unconditionally over per-app allowLanOnly (D4) — on untrusted
+        // networks, LAN devices ARE the threat model. User can override by
+        // switching to Home mode where blockLan is not set.
+        if (blockLanTraffic && isLanAddress(destIp)) {
+            return "block"
         }
 
         // P2: Temporary rules (skip expired entries)
@@ -388,7 +425,7 @@ object RuleRepository {
         }
     }
 
-    private fun isLanAddress(ip: String): Boolean {
+    internal fun isLanAddress(ip: String): Boolean {
         if (ip.isEmpty()) return false
         return ip.startsWith("192.168.") ||
                ip.startsWith("10.") ||

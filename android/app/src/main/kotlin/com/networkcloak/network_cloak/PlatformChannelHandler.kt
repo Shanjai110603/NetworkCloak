@@ -89,6 +89,9 @@ object PlatformChannelHandler {
                 @Suppress("UNCHECKED_CAST")
                 val rules = call.argument<List<Map<String, Any?>>>("rules") ?: emptyList()
                 RuleRepository.updateRules(rules)
+                // Read blockLan flag from the call and apply it (D4)
+                val blockLan = call.argument<Boolean>("blockLan") ?: false
+                RuleRepository.blockLanTraffic = blockLan
                 // Update lastKnownContext so conditionsMatch() stays current
                 updateRuleContext(context)
                 refreshVpnService(context)
@@ -115,6 +118,7 @@ object PlatformChannelHandler {
             "getStatus" -> {
                 result.success(mapOf(
                     "isRunning" to NetworkCloakVpnService.isRunning,
+                    "mode"      to NetworkCloakVpnService.currentMode.toEventString(),
                     "isLockdown" to RuleRepository.isLockdownActive,
                 ))
             }
@@ -128,6 +132,60 @@ object PlatformChannelHandler {
                 val lists = call.argument<List<Map<String, Any?>>>("lists") ?: emptyList()
                 DnsGuardEngine.updateBlocklists(lists)
                 result.success(null)
+            }
+            "updateQuickBlock" -> {
+                @Suppress("UNCHECKED_CAST")
+                val apps = call.argument<List<String>>("apps") ?: emptyList()
+                RuleRepository.updateQuickBlockList(apps)
+                // If VPN is running, refresh config
+                refreshVpnService(context)
+                result.success(null)
+            }
+            "startQuickBlock" -> {
+                // If full protection is already running, just update the list
+                if (NetworkCloakVpnService.currentMode == NetworkCloakVpnService.VpnMode.FULL) {
+                    result.success(true)
+                    return
+                }
+                // Start VPN in Quick Block mode
+                val vpnIntent = VpnService.prepare(context)
+                if (vpnIntent != null) {
+                    val activity = context as? android.app.Activity
+                    activity?.startActivityForResult(vpnIntent, 1003)
+                    result.success(false)
+                } else {
+                    val intent = Intent(context, NetworkCloakVpnService::class.java).apply {
+                        putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START_QUICK_BLOCK)
+                    }
+                    context.startService(intent)
+                    result.success(true)
+                }
+            }
+            "setAlertNotificationsEnabled" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: true
+                context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("alertNotificationsEnabled", enabled)
+                    .apply()
+                result.success(null)
+            }
+            "getAlertNotificationsEnabled" -> {
+                val enabled = context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .getBoolean("alertNotificationsEnabled", true)
+                result.success(enabled)
+            }
+            "setRetentionDays" -> {
+                val days = call.argument<Int>("days") ?: 30
+                context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .edit()
+                    .putInt("retentionDays", days)
+                    .apply()
+                result.success(null)
+            }
+            "getRetentionDays" -> {
+                val days = context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .getInt("retentionDays", 30)
+                result.success(days)
             }
             else -> result.notImplemented()
         }

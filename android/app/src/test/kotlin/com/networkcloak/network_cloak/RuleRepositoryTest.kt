@@ -30,6 +30,8 @@ class RuleRepositoryTest {
         // Start each test with a clean slate
         RuleRepository.updateRules(emptyList())
         RuleRepository.deactivateLockdown()
+        RuleRepository.updateQuickBlockList(emptyList())
+        RuleRepository.blockLanTraffic = false
     }
 
     // ── Lockdown (P1) ─────────────────────────────────────────────────────────
