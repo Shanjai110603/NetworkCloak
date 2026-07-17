@@ -64,7 +64,6 @@ class NetworkCloakVpnService : VpnService() {
 
         /** Tri-state VPN mode (D2): OFF, QUICK_BLOCK, or FULL */
         @Volatile var currentMode: VpnMode = VpnMode.OFF
-            private set
 
         /** Backward compat convenience */
         val isRunning: Boolean get() = currentMode != VpnMode.OFF
@@ -83,7 +82,7 @@ class NetworkCloakVpnService : VpnService() {
         }
     }
 
-    private val running       = AtomicBoolean(false)
+    val running       = AtomicBoolean(false)
     private var tunInterface: ParcelFileDescriptor? = null
     private var workerThread: Thread? = null
 
@@ -168,12 +167,36 @@ class NetworkCloakVpnService : VpnService() {
     }
 
     private fun startVpn(mode: VpnMode = VpnMode.FULL) {
-        if (running.getAndSet(true)) return
+        if (running.get()) {
+            if (currentMode == mode) return  // already in the requested mode, nothing to do
+            if (currentMode == VpnMode.QUICK_BLOCK && mode == VpnMode.FULL) {
+                // Upgrade in place — don't tear down the TUN interface/thread,
+                // just attach the pieces Quick Block skipped.
+                DnsGuardEngine.attach(this)
+                currentMode = VpnMode.FULL
+                persistProtectionState(VpnMode.FULL)
+                NativeEventBus.postProtectionStateChanged(VpnMode.FULL.toEventString())
+                return
+            }
+            // FULL -> QUICK_BLOCK downgrade: detach DnsGuardEngine, keep tunnel running
+            if (currentMode == VpnMode.FULL && mode == VpnMode.QUICK_BLOCK) {
+                DnsGuardEngine.detach()
+                currentMode = VpnMode.QUICK_BLOCK
+                persistProtectionState(VpnMode.QUICK_BLOCK)
+                NativeEventBus.postProtectionStateChanged(VpnMode.QUICK_BLOCK.toEventString())
+                return
+            }
+            return
+        }
+        running.set(true)
 
         createNotificationChannel()
         // Create the nc_alerts channel for system notifications (D5)
         NativeEventBus.createAlertsChannel(this)
         startForeground(NOTIFICATION_ID, buildNotification())
+
+        val prefs = getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+        RuleRepository.cloakEnabled = prefs.getBoolean("cloakEnabled", false)
 
         configureVpn()
 
@@ -184,7 +207,7 @@ class NetworkCloakVpnService : VpnService() {
         }
 
         currentMode = mode
-        persistProtectionState(active = true)
+        persistProtectionState(mode)
 
         // Attach DnsGuardEngine only in FULL mode — Quick Block skips DNS interception
         if (mode == VpnMode.FULL) {
@@ -215,7 +238,7 @@ class NetworkCloakVpnService : VpnService() {
         tunInterface = null
         currentMode = VpnMode.OFF
 
-        persistProtectionState(active = false)
+        persistProtectionState(VpnMode.OFF)
         NativeEventBus.postProtectionStateChanged(VpnMode.OFF.toEventString())
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -233,10 +256,10 @@ class NetworkCloakVpnService : VpnService() {
     }
 
     /** Persists protection state for BootReceiver to read on next device start. */
-    private fun persistProtectionState(active: Boolean) {
+    private fun persistProtectionState(mode: VpnMode) {
         getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .putBoolean(BootReceiver.KEY_WAS_ACTIVE, active)
+            .putString(BootReceiver.KEY_LAST_MODE, mode.name)
             .apply()
     }
 

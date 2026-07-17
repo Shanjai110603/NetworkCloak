@@ -51,7 +51,7 @@ class DataRetentionScreen extends ConsumerWidget {
                     ),
                     subtitle: Text(
                       opt.$3,
-                      style: const TextStyle(color: NcColors.textSecondary),
+                      style: TextStyle(color: NcColors.textSecondary),
                     ),
                     value: opt.$1,
                     activeColor: NcColors.primary,
@@ -76,7 +76,7 @@ class DataRetentionScreen extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Local Database',
                   style: TextStyle(
                     fontSize: 15,
@@ -85,7 +85,7 @@ class DataRetentionScreen extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
+                Text(
                   'Instantly wipe all local connection logs, DNS queries, and security alerts from this device.',
                   style: TextStyle(
                     fontSize: 13,
@@ -125,7 +125,7 @@ class DataRetentionScreen extends ConsumerWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: NcColors.textSecondary)),
+            child: Text('Cancel', style: TextStyle(color: NcColors.textSecondary)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: NcColors.unprotected),

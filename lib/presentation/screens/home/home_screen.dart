@@ -409,7 +409,7 @@ class _LivePulseCard extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           if (connections.isEmpty)
-            const Center(
+            Center(
               child: Text(
                 'No active connections',
                 style: TextStyle(color: NcColors.textMuted),
@@ -476,7 +476,7 @@ class _LiveConnectionRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const Icon(Icons.swap_horiz, size: 14, color: NcColors.textMuted),
+        Icon(Icons.swap_horiz, size: 14, color: NcColors.textMuted),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
@@ -487,7 +487,7 @@ class _LiveConnectionRow extends StatelessWidget {
         ),
         Text(
           '→ ${conn.dest}',
-          style: const TextStyle(color: NcColors.textMuted, fontSize: 12),
+          style: TextStyle(color: NcColors.textMuted, fontSize: 12),
           overflow: TextOverflow.ellipsis,
         ),
       ],
@@ -657,9 +657,9 @@ class _LockdownButton extends ConsumerWidget {
       context: ctx,
       builder: (c) => AlertDialog(
         backgroundColor: NcColors.surface,
-        title: const Text('Activate Lockdown?',
+        title: Text('Activate Lockdown?',
             style: TextStyle(color: NcColors.textPrimary)),
-        content: const Text(
+        content: Text(
           'Lockdown blocks all apps immediately. '
           'Only phone calls and emergency services will be allowed.',
           style: TextStyle(color: NcColors.textSecondary),
@@ -735,7 +735,7 @@ class _QuickBlockCard extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Quick Block',
                   style: TextStyle(
                     fontSize: 16,
@@ -748,7 +748,7 @@ class _QuickBlockCard extends ConsumerWidget {
                   quickBlockState.masterEnabled
                       ? 'Active: $count apps blocked'
                       : '$count apps configured',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 13,
                     color: NcColors.textSecondary,
                   ),

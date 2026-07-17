@@ -1,13 +1,18 @@
 // Drift-generated classes have the same names as domain entities.
 // We import the database and hide its generated row types, using
 // domain entities throughout the app instead.
+import 'dart:async';
+import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../app/theme/app_theme.dart';
 
 import '../../data/database/app_database.dart'
     hide Alert, FirewallRule, LiveConnection, DnsProfile, TrustedNetwork;
 import '../../domain/entities/alert.dart';
+import '../../domain/entities/application_info.dart';
 import '../../domain/entities/connection_record.dart';
 import '../../domain/entities/firewall_rule.dart';
 import '../../domain/entities/trusted_network.dart';
@@ -32,6 +37,47 @@ final databaseProvider = Provider<AppDatabase>((ref) {
 
 final platformBridgeProvider = Provider<PlatformChannelBridge>((ref) {
   return PlatformChannelBridge();
+});
+
+// ─────────────────────────────────────────────────────────────
+// Installed Apps Provider
+// ─────────────────────────────────────────────────────────────
+
+/// Fetches the full list of installed apps from the Android PackageManager
+/// via the platform channel. Cached for the lifetime of the provider;
+/// invalidate by calling ref.invalidate(installedAppsProvider).
+///
+/// On non-Android platforms (Windows dev, unit tests) returns an empty list.
+final installedAppsProvider = FutureProvider<List<ApplicationInfo>>((ref) async {
+  try {
+    final bridge = ref.read(platformBridgeProvider);
+    final raw = await bridge.getInstalledApps();
+    return raw.map((m) {
+      final iconB64 = m['iconBase64'] as String?;
+      final Uint8List? iconBytes = iconB64 != null && iconB64.isNotEmpty
+          ? base64Decode(iconB64)
+          : null;
+      return ApplicationInfo(
+        id: m['packageName'] as String,
+        packageName: m['packageName'] as String,
+        displayName: (m['displayName'] as String?)?.isNotEmpty == true
+            ? m['displayName'] as String
+            : m['packageName'] as String,
+        version: m['version'] as String?,
+        isSystem: m['isSystem'] as bool? ?? false,
+        firstSeen: DateTime.now(),
+        iconBytes: iconBytes,
+        riskLevel: m['riskLevel'] as String?,
+        riskScore: m['riskScore'] as int?,
+        riskReasons: m['riskReasons'] != null
+            ? List<String>.from(m['riskReasons'] as List)
+            : null,
+      );
+    }).toList();
+  } catch (e) {
+    debugPrint('[NC] installedAppsProvider error: $e');
+    return [];
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -189,56 +235,143 @@ class FirewallRulesNotifier
   Future<void> _load() async {
     state = const AsyncValue.loading();
     try {
-      var rows = await _db.select(_db.firewallRules).get();
-      if (rows.isEmpty) {
-        final nowMs = DateTime.now().millisecondsSinceEpoch;
-        final defaultApps = [
-          ('com.android.chrome', RuleAction.allow),
-          ('com.spotify.music', RuleAction.allow),
-          ('com.whatsapp', RuleAction.ask),
-          ('com.instagram.android', RuleAction.block),
-          ('system_process', RuleAction.allow),
-        ];
-        for (final app in defaultApps) {
-          final newId = 'rule_${nowMs}_${app.$1}';
-          await _db.into(_db.firewallRules).insert(FirewallRulesCompanion.insert(
-            id: newId,
-            appId: Value(app.$1),
-            action: app.$2.name,
-            priority: RulePriority.manualApp.value,
+      // ── Fetch DB rules and installed apps in parallel ──────────────
+      final dbRulesFuture = _db.select(_db.firewallRules).get();
+      final installedFuture = _ref.read(platformBridgeProvider).getInstalledApps();
+
+      final results = await Future.wait([dbRulesFuture, installedFuture]);
+      final rows = results[0] as List;
+      final rawApps = results[1] as List<Map<String, dynamic>>;
+
+      // ── Build a lookup of existing rules by package name ───────────
+      final existingRulesByAppId = <String, dynamic>{};
+      for (final row in rows) {
+        final r = row as dynamic;
+        if (r.appId != null) {
+          existingRulesByAppId[r.appId as String] = r;
+        }
+      }
+
+      // ── Merge: every installed app gets a FirewallRule ─────────────
+      // Apps with an existing DB rule use that action.
+      // Apps without a rule get a virtual 'ask' row (not persisted to DB).
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final merged = <FirewallRule>[];
+
+      // 1. Collect installed apps (real device apps take precedence)
+      final seenPackages = <String>{};
+      for (final app in rawApps) {
+        final pkg = app['packageName'] as String? ?? '';
+        if (pkg.isEmpty) continue;
+        seenPackages.add(pkg);
+
+        final existing = existingRulesByAppId[pkg];
+        if (existing != null) {
+          merged.add(FirewallRule(
+            id: existing.id as String,
+            appId: existing.appId as String?,
+            action: RuleAction.values.firstWhere(
+              (a) => a.name == existing.action,
+              orElse: () => RuleAction.ask,
+            ),
+            priority: RulePriority.values.firstWhere(
+              (p) => p.value == existing.priority,
+              orElse: () => RulePriority.defaultBehavior,
+            ),
+            conditionsJson: existing.conditionsJson as String,
+            profileId: existing.profileId as String?,
+            isGlobal: existing.isGlobal as bool,
+            createdAt: DateTime.fromMillisecondsSinceEpoch(existing.createdAt as int),
+            updatedAt: DateTime.fromMillisecondsSinceEpoch(existing.updatedAt as int),
+            displayName: (app['displayName'] as String?)?.isNotEmpty == true
+                ? app['displayName'] as String
+                : pkg,
+            iconBytes: _decodeIcon(app['iconBase64'] as String?),
+            isSystemApp: app['isSystem'] as bool? ?? false,
+            riskLevel: app['riskLevel'] as String?,
+            riskScore: app['riskScore'] as int?,
+            riskReasons: app['riskReasons'] != null
+                ? List<String>.from(app['riskReasons'] as List)
+                : null,
+          ));
+        } else {
+          // Virtual rule — shown in UI but not yet persisted
+          merged.add(FirewallRule(
+            id: 'virtual_$pkg',
+            appId: pkg,
+            action: RuleAction.ask,
+            priority: RulePriority.defaultBehavior,
             conditionsJson: '{}',
-            profileId: const Value('default'),
-            isGlobal: const Value(false),
-            createdAt: nowMs,
-            updatedAt: nowMs,
+            profileId: 'default',
+            isGlobal: false,
+            createdAt: DateTime.fromMillisecondsSinceEpoch(nowMs),
+            updatedAt: DateTime.fromMillisecondsSinceEpoch(nowMs),
+            displayName: (app['displayName'] as String?)?.isNotEmpty == true
+                ? app['displayName'] as String
+                : pkg,
+            iconBytes: _decodeIcon(app['iconBase64'] as String?),
+            isSystemApp: app['isSystem'] as bool? ?? false,
+            riskLevel: app['riskLevel'] as String?,
+            riskScore: app['riskScore'] as int?,
+            riskReasons: app['riskReasons'] != null
+                ? List<String>.from(app['riskReasons'] as List)
+                : null,
           ));
         }
-        rows = await _db.select(_db.firewallRules).get();
       }
-      state = AsyncValue.data(rows
-          .map((r) => FirewallRule(
-                id: r.id,
-                appId: r.appId,
-                action: RuleAction.values.firstWhere(
-                  (a) => a.name == r.action,
-                  orElse: () => RuleAction.ask,
-                ),
-                priority: RulePriority.values.firstWhere(
-                  (p) => p.value == r.priority,
-                  orElse: () => RulePriority.defaultBehavior,
-                ),
-                conditionsJson: r.conditionsJson,
-                profileId: r.profileId,
-                isGlobal: r.isGlobal,
-                createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt),
-                updatedAt: DateTime.fromMillisecondsSinceEpoch(r.updatedAt),
-              ))
-          .toList());
+
+      // 2. Add any DB rules for packages NOT in the installed list
+      //    (e.g. rules for recently uninstalled apps — keep them visible)
+      for (final row in rows) {
+        final r = row as dynamic;
+        final pkg = r.appId as String?;
+        if (pkg == null || seenPackages.contains(pkg)) continue;
+        merged.add(FirewallRule(
+          id: r.id as String,
+          appId: pkg,
+          action: RuleAction.values.firstWhere(
+            (a) => a.name == r.action,
+            orElse: () => RuleAction.ask,
+          ),
+          priority: RulePriority.values.firstWhere(
+            (p) => p.value == r.priority,
+            orElse: () => RulePriority.defaultBehavior,
+          ),
+          conditionsJson: r.conditionsJson as String,
+          profileId: r.profileId as String?,
+          isGlobal: r.isGlobal as bool,
+          createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt as int),
+          updatedAt: DateTime.fromMillisecondsSinceEpoch(r.updatedAt as int),
+        ));
+      }
+
+      // ── Sort: user apps first, then by display name ────────────────
+      merged.sort((a, b) {
+        final aSystem = a.isSystemApp ? 1 : 0;
+        final bSystem = b.isSystemApp ? 1 : 0;
+        if (aSystem != bSystem) return aSystem.compareTo(bSystem);
+        return (a.displayName ?? a.appId ?? '')
+            .toLowerCase()
+            .compareTo((b.displayName ?? b.appId ?? '').toLowerCase());
+      });
+
+      state = AsyncValue.data(merged);
       await syncRulesToNative();
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
   }
+
+  static List<int>? _decodeIcon(String? base64Str) {
+    if (base64Str == null || base64Str.isEmpty) return null;
+    try {
+      return base64Decode(base64Str);
+    } catch (_) {
+      return null;
+    }
+  }
+
+
 
   Future<void> refresh() => _load();
 
@@ -301,8 +434,28 @@ class FirewallRulesNotifier
           'priority': rule.priority.value,
           'isGlobal': rule.isGlobal,
           'conditionsJson': rule.conditionsJson,
+          // Include createdAt so native can apply newest-wins tiebreaker
+          'createdAt': rule.createdAt.millisecondsSinceEpoch,
         });
       }
+
+      // ── Deterministic ordering: mirrors EvaluateRuleUseCase tie-breaking ──
+      // Within the same priority tier: blocking rules first, then newest first.
+      // This ensures RuleRepository.evaluate() on Android/Windows sees the
+      // correct winner at the head of each tier without needing to re-sort.
+      serialized.sort((a, b) {
+        final int pa = a['priority'] as int;
+        final int pb = b['priority'] as int;
+        if (pa != pb) return pa.compareTo(pb); // lower value = higher priority
+
+        final bool aBlocks = _isBlockingAction(a['action'] as String);
+        final bool bBlocks = _isBlockingAction(b['action'] as String);
+        if (aBlocks != bBlocks) return aBlocks ? -1 : 1; // blocking first
+
+        final int aTs = a['createdAt'] as int;
+        final int bTs = b['createdAt'] as int;
+        return bTs.compareTo(aTs); // newest first
+      });
 
       final blockLan = activeMode == ProtectionMode.publicWifi ||
           activeMode == ProtectionMode.travel ||
@@ -314,6 +467,9 @@ class FirewallRulesNotifier
       debugPrint('[NC] syncRulesToNative failed: $e\n$st');
     }
   }
+
+  static bool _isBlockingAction(String action) =>
+      action == 'block' || action == 'temporaryBlock' || action == 'blockBackground';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -503,23 +659,39 @@ class DnsProfileNotifier extends StateNotifier<DnsProfile> {
   DnsProfileNotifier(this._ref) : super(DnsProfile.defaultProfile);
   final Ref _ref;
 
-  Future<void> selectProvider(String name, String endpoint) async {
-    // Map display name/endpoint to DoH URL + hostname
-    // Endpoint should be an IP literal; derive doHHostname from provider name
-    final doHUrl = 'https://$endpoint/dns-query';
-    final doHHostname = _resolverHostname(name);
+  Future<void> selectProvider(String name, String endpoint, {String? doHHostname}) async {
+    // If endpoint is already a full https:// URL (e.g. from the custom dialog),
+    // use it directly. Otherwise derive the DoH URL from the IP literal.
+    final String doHUrl;
+    final String resolvedHostname;
+    if (endpoint.startsWith('https://') || endpoint.startsWith('http://')) {
+      doHUrl = endpoint;
+      resolvedHostname = doHHostname ?? _resolverHostname(name);
+    } else if (endpoint == 'system') {
+      // System default — let the OS handle DNS (no DoH interception)
+      doHUrl = '';
+      resolvedHostname = '';
+    } else {
+      // IP-literal endpoint from the preset list (e.g. '1.1.1.1')
+      doHUrl = 'https://$endpoint/dns-query';
+      resolvedHostname = doHHostname ?? _resolverHostname(name);
+    }
+
     state = DnsProfile(
       id: 'active_dns',
       name: name,
       provider: name.toLowerCase(),
       protocol: DnsProtocol.doh,
-      endpoint: endpoint,
+      endpoint: doHUrl.isNotEmpty ? doHUrl : endpoint,
       enabledCategories: state.enabledCategories,
     );
-    await _ref.read(platformBridgeProvider).setDnsProfile({
-      'doHUrl': doHUrl,
-      'doHHostname': doHHostname,
-    });
+
+    if (doHUrl.isNotEmpty) {
+      await _ref.read(platformBridgeProvider).setDnsProfile({
+        'doHUrl': doHUrl,
+        'doHHostname': resolvedHostname,
+      });
+    }
   }
 
   static String _resolverHostname(String providerName) {
@@ -623,6 +795,28 @@ class RetentionDaysNotifier extends StateNotifier<int> {
   }
 }
 
+final securityRiskIndicatorsProvider = StateNotifierProvider<SecurityRiskIndicatorsNotifier, bool>((ref) {
+  return SecurityRiskIndicatorsNotifier(ref);
+});
+
+class SecurityRiskIndicatorsNotifier extends StateNotifier<bool> {
+  SecurityRiskIndicatorsNotifier(this._ref) : super(true) {
+    _init();
+  }
+  final Ref _ref;
+  Future<void> _init() async {
+    final val = await _ref.read(platformBridgeProvider).getSecurityRiskIndicatorsEnabled();
+    state = val;
+  }
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _ref.read(platformBridgeProvider).setSecurityRiskIndicatorsEnabled(enabled);
+    _ref.invalidate(installedAppsProvider);
+    _ref.read(firewallRulesProvider.notifier).refresh();
+  }
+}
+
+
 final autoSwitchEnabledProvider = StateNotifierProvider<AutoSwitchEnabledNotifier, bool>((ref) {
   return AutoSwitchEnabledNotifier();
 });
@@ -680,6 +874,7 @@ class QuickBlockNotifier extends StateNotifier<QuickBlockState> {
   }
 
   Future<void> toggle(String appId) async {
+    final wasEmpty = state.apps.isEmpty;
     final apps = Set<String>.from(state.apps);
     if (apps.contains(appId)) {
       apps.remove(appId);
@@ -700,6 +895,10 @@ class QuickBlockNotifier extends StateNotifier<QuickBlockState> {
 
     if (state.masterEnabled) {
       await _ref.read(platformBridgeProvider).updateQuickBlock(apps.toList());
+      final currentMode = _ref.read(protectionStateProvider).valueOrNull ?? 'off';
+      if (wasEmpty && apps.isNotEmpty && currentMode == 'off') {
+        await _ref.read(platformBridgeProvider).startQuickBlock();
+      }
     }
 
     if (apps.isEmpty && state.masterEnabled) {
@@ -781,6 +980,144 @@ final trustedNetworksProvider = StreamProvider<List<TrustedNetwork>>((ref) {
         profileId: r.profileId,
       )).toList());
 });
+
+// ─────────────────────────────────────────────────────────────
+// Watchtower — Throughput Monitor
+// ─────────────────────────────────────────────────────────────
+
+class ThroughputState {
+  ThroughputState({
+    required this.speedHistory,
+    required this.currentSpeed,
+    required this.peakSpeed,
+    required this.totalBytes,
+  });
+
+  final List<double> speedHistory; // Rolling history in KB/s
+  final double currentSpeed;       // Current speed in B/s
+  final double peakSpeed;          // Peak speed in B/s
+  final int totalBytes;            // Accumulated total bytes
+
+  ThroughputState copyWith({
+    List<double>? speedHistory,
+    double? currentSpeed,
+    double? peakSpeed,
+    int? totalBytes,
+  }) {
+    return ThroughputState(
+      speedHistory: speedHistory ?? this.speedHistory,
+      currentSpeed: currentSpeed ?? this.currentSpeed,
+      peakSpeed: peakSpeed ?? this.peakSpeed,
+      totalBytes: totalBytes ?? this.totalBytes,
+    );
+  }
+}
+
+final throughputProvider = StateNotifierProvider<ThroughputNotifier, ThroughputState>((ref) {
+  return ThroughputNotifier(ref);
+});
+
+class ThroughputNotifier extends StateNotifier<ThroughputState> {
+  ThroughputNotifier(this._ref)
+      : super(ThroughputState(
+          speedHistory: List.filled(15, 0.0),
+          currentSpeed: 0.0,
+          peakSpeed: 0.0,
+          totalBytes: 0,
+        )) {
+    _startListening();
+  }
+
+  final Ref _ref;
+  StreamSubscription? _sub;
+  Timer? _timer;
+  int _bytesAccumulatedInSecond = 0;
+  int _totalBytesAccumulated = 0;
+
+  void _startListening() {
+    final bridge = _ref.read(platformBridgeProvider);
+    _sub = bridge.connectionEvents.listen((e) {
+      final int bytes = e['bytes'] as int? ?? 0;
+      // Filter out 'dns' or UID=-1 if desired, but here we track total aggregate throughput
+      _bytesAccumulatedInSecond += bytes;
+      _totalBytesAccumulated += bytes;
+    });
+
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      final double speed = _bytesAccumulatedInSecond.toDouble(); // bytes per second
+      _bytesAccumulatedInSecond = 0;
+
+      final double peak = speed > state.peakSpeed ? speed : state.peakSpeed;
+      final List<double> history = List<double>.from(state.speedHistory);
+      if (history.isNotEmpty) {
+        history.removeAt(0);
+      }
+      history.add(speed / 1024.0); // Convert to KB/s for history graph
+
+      state = ThroughputState(
+        speedHistory: history,
+        currentSpeed: speed,
+        peakSpeed: peak,
+        totalBytes: _totalBytesAccumulated,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _timer?.cancel();
+    super.dispose();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Theme Mode & Cloak Engine Settings
+// ─────────────────────────────────────────────────────────────
+
+final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((ref) {
+  return ThemeModeNotifier(ref);
+});
+
+class ThemeModeNotifier extends StateNotifier<ThemeMode> {
+  ThemeModeNotifier(this._ref) : super(ThemeMode.dark) {
+    _init();
+  }
+  final Ref _ref;
+
+  Future<void> _init() async {
+    final enabled = await _ref.read(platformBridgeProvider).getThemeLightEnabled();
+    state = enabled ? ThemeMode.light : ThemeMode.dark;
+    NcColors.updateColors(state);
+  }
+
+  Future<void> setMode(ThemeMode mode) async {
+    state = mode;
+    NcColors.updateColors(mode);
+    await _ref.read(platformBridgeProvider).setThemeLightEnabled(mode == ThemeMode.light);
+  }
+}
+
+final cloakEnabledProvider = StateNotifierProvider<CloakEnabledNotifier, bool>((ref) {
+  return CloakEnabledNotifier(ref);
+});
+
+class CloakEnabledNotifier extends StateNotifier<bool> {
+  CloakEnabledNotifier(this._ref) : super(false) {
+    _init();
+  }
+  final Ref _ref;
+
+  Future<void> _init() async {
+    final enabled = await _ref.read(platformBridgeProvider).getCloakEnabled();
+    state = enabled;
+  }
+
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _ref.read(platformBridgeProvider).setCloakEnabled(enabled);
+  }
+}
 
 
 

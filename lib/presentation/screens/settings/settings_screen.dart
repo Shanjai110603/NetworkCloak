@@ -13,6 +13,9 @@ class SettingsScreen extends ConsumerWidget {
     final autoSwitch = ref.watch(autoSwitchEnabledProvider);
     final notificationsEnabled = ref.watch(notificationsEnabledProvider);
     final retentionDays = ref.watch(retentionDaysProvider);
+    final showSecurityRisk = ref.watch(securityRiskIndicatorsProvider);
+    final cloakEnabled = ref.watch(cloakEnabledProvider);
+    final themeMode = ref.watch(themeModeProvider);
 
     return Scaffold(
       backgroundColor: NcColors.bg,
@@ -25,7 +28,7 @@ class SettingsScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.dns_outlined,
                 label: 'DNS Guard',
-                subtitle: '${dnsProfile.name} · ${dnsProfile.enabledCategories.length} categories',
+                subtitle: '${dnsProfile.name} • ${dnsProfile.enabledCategories.length} categories',
                 onTap: () => context.push('/dns'),
               ),
               _SettingsTile(
@@ -37,7 +40,7 @@ class SettingsScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.lock_outline,
                 label: 'Cloak',
-                subtitle: 'Coming in v2.0',
+                subtitle: cloakEnabled ? 'Active (Shielded)' : 'Disabled',
                 onTap: () => context.push('/settings/cloak'),
               ),
             ],
@@ -54,7 +57,7 @@ class SettingsScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.palette_outlined,
                 label: 'Appearance',
-                subtitle: 'Stealth (Dark Mode)',
+                subtitle: themeMode == ThemeMode.light ? 'Light Mode' : 'Stealth (Dark Mode)',
                 onTap: () => context.push('/settings/appearance'),
               ),
               _SettingsTile(
@@ -62,6 +65,13 @@ class SettingsScreen extends ConsumerWidget {
                 label: 'Data & Retention',
                 subtitle: '$retentionDays-day log retention',
                 onTap: () => context.push('/settings/data-retention'),
+              ),
+              _SettingsSwitchTile(
+                icon: Icons.security_outlined,
+                label: 'Security Risk Indicators',
+                subtitle: showSecurityRisk ? 'Show app risk warnings' : 'Risk warnings hidden',
+                value: showSecurityRisk,
+                onChanged: (val) => ref.read(securityRiskIndicatorsProvider.notifier).setEnabled(val),
               ),
             ],
           ),
@@ -92,16 +102,16 @@ class SettingsScreen extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: NcColors.border),
               ),
-              child: const Column(
+              child: Column(
                 children: [
-                  Text(
+                  const Text(
                     'No account needed. No cloud.',
                     style: TextStyle(
                         color: NcColors.primary,
                         fontWeight: FontWeight.w700,
                         fontSize: 14),
                   ),
-                  SizedBox(height: 4),
+                  const SizedBox(height: 4),
                   Text(
                     'All your data stays on this device.\nNetwork Cloak never sends your information anywhere.',
                     style: TextStyle(
@@ -122,7 +132,7 @@ class SettingsScreen extends ConsumerWidget {
 class _SettingsGroup extends StatelessWidget {
   const _SettingsGroup({required this.title, required this.items});
   final String title;
-  final List<_SettingsTile> items;
+  final List<Widget> items;
 
   @override
   Widget build(BuildContext context) {
@@ -152,7 +162,7 @@ class _SettingsGroup extends StatelessWidget {
                         children: [
                           e.value,
                           if (e.key < items.length - 1)
-                            const Divider(
+                            Divider(
                               height: 0,
                               indent: 56,
                               color: NcColors.border,
@@ -194,8 +204,44 @@ class _SettingsTile extends StatelessWidget {
       title: Text(label, style: Theme.of(context).textTheme.titleMedium),
       subtitle:
           Text(subtitle, style: Theme.of(context).textTheme.bodyMedium),
-      trailing: const Icon(Icons.chevron_right, color: NcColors.textMuted),
+      trailing: Icon(Icons.chevron_right, color: NcColors.textMuted),
       onTap: onTap,
+    );
+  }
+}
+
+class _SettingsSwitchTile extends StatelessWidget {
+  const _SettingsSwitchTile({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+  final IconData icon;
+  final String label, subtitle;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: NcColors.primary.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: Icon(icon, color: NcColors.primary, size: 20),
+      ),
+      title: Text(label, style: Theme.of(context).textTheme.titleMedium),
+      subtitle:
+          Text(subtitle, style: Theme.of(context).textTheme.bodyMedium),
+      trailing: Switch(
+        value: value,
+        onChanged: onChanged,
+      ),
     );
   }
 }

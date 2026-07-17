@@ -21,6 +21,8 @@ import java.util.concurrent.TimeUnit
 class NetworkCloakApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        RuleRepository.attachContext(this)
+        NativeEventBus.createAlertsChannel(this)
         ConnectivityMonitor.start(this)
 
         // Schedule periodic database data retention cleanup (every 24 hours) (D6)

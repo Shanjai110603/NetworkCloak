@@ -145,6 +145,9 @@ object RuleRepository {
     @Volatile var isLockdownActive: Boolean = false
         private set
 
+    // ── Cloak Engine ──────────────────────────────────────────────
+    @Volatile var cloakEnabled: Boolean = false
+
     private val lockdownAllowlist = CopyOnWriteArrayList<String>()
 
     // ── P2: Temporary rules ───────────────────────────────────────
@@ -241,6 +244,12 @@ object RuleRepository {
               "manual=${manualRules.size} profile=${profileRules.size} global=${globalRules.size}")
     }
 
+    private var contextRef: java.lang.ref.WeakReference<Context>? = null
+
+    fun attachContext(context: Context) {
+        contextRef = java.lang.ref.WeakReference(context.applicationContext)
+    }
+
     // ── Lockdown API ──────────────────────────────────────────────
 
     fun activateLockdown(allowlist: List<String>) {
@@ -253,6 +262,14 @@ object RuleRepository {
             title     = "Lockdown Active",
             message   = "All connections are blocked except phone calls.",
         )
+        contextRef?.get()?.let { ctx ->
+            NativeEventBus.postSystemNotification(
+                context = ctx,
+                title = "Lockdown Active",
+                body = "All connections are blocked except phone calls.",
+                severity = "warning"
+            )
+        }
     }
 
     fun deactivateLockdown() {
@@ -340,6 +357,28 @@ object RuleRepository {
         // P1: Lockdown — unconditional, never expires
         if (isLockdownActive) {
             return if (lockdownAllowlist.contains(appId)) "allow" else "block"
+        }
+
+        // Cloak Engine: Block LAN discovery/multicast if enabled
+        if (cloakEnabled) {
+            // Block local discovery / multicast ports:
+            // 5353 (mDNS), 5355 (LLMNR), 137/138/139 (NetBIOS), 445 (SMB), 1900 (SSDP/UPnP)
+            if (destPort == 5353 || destPort == 5355 || destPort == 137 || destPort == 138 || destPort == 139 || destPort == 445 || destPort == 1900) {
+                return "block"
+            }
+            // Block IP multicast (224.0.0.0/4) or broadcast 255.255.255.255
+            if (destIp.isNotEmpty()) {
+                val parts = destIp.split(".")
+                if (parts.size >= 4) {
+                    val firstOctet = parts[0].toIntOrNull()
+                    if (firstOctet != null && firstOctet in 224..239) {
+                        return "block"
+                    }
+                }
+                if (destIp == "255.255.255.255") {
+                    return "block"
+                }
+            }
         }
 
         // P1.5: Global LAN block (Public Wi-Fi / Travel / Lockdown modes).

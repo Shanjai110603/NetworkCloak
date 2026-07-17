@@ -34,12 +34,12 @@ class AlertsScreen extends ConsumerWidget {
         ],
       ),
       body: alerts.isEmpty
-          ? const Center(
+          ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(Icons.shield_outlined, size: 64, color: NcColors.textMuted),
-                  SizedBox(height: 16),
+                  const SizedBox(height: 16),
                   Text(
                     'All systems clear',
                     style: TextStyle(
@@ -48,7 +48,7 @@ class AlertsScreen extends ConsumerWidget {
                       color: NcColors.textPrimary,
                     ),
                   ),
-                  SizedBox(height: 6),
+                  const SizedBox(height: 6),
                   Text(
                     'No security threats or anomalies detected.',
                     style: TextStyle(color: NcColors.textSecondary),
@@ -163,7 +163,7 @@ class _AlertCard extends ConsumerWidget {
                   const SizedBox(height: 6),
                   Text(
                     alert.body,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       color: NcColors.textSecondary,
                       height: 1.4,
@@ -180,7 +180,7 @@ class _AlertCard extends ConsumerWidget {
                       ),
                       child: Text(
                         alert.appId!,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 11,
                           fontFamily: 'monospace',
                           color: NcColors.textMuted,
@@ -191,7 +191,7 @@ class _AlertCard extends ConsumerWidget {
                   const SizedBox(height: 8),
                   Text(
                     _formatTime(alert.createdAt),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11,
                       color: NcColors.textMuted,
                     ),

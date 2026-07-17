@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/providers.dart';
@@ -33,8 +34,8 @@ class _FirewallScreenState extends ConsumerState<FirewallScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                   child: Text(
                     'Bulk Actions',
                     style: TextStyle(
@@ -116,9 +117,7 @@ class _FirewallScreenState extends ConsumerState<FirewallScreen> {
         if (_filter == 'Ask' && r.action != RuleAction.ask) {
           return false;
         }
-        final isSystem = r.appId == 'system_process' ||
-            (r.appId?.startsWith('com.android.') ?? false) ||
-            (r.appId?.startsWith('android.') ?? false);
+        final isSystem = r.isSystemApp;
         if (_filter == 'System' && !isSystem) {
           return false;
         }
@@ -145,7 +144,7 @@ class _FirewallScreenState extends ConsumerState<FirewallScreen> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
             child: TextField(
               controller: _searchCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: 'Search apps...',
                 prefixIcon: Icon(Icons.search, color: NcColors.textMuted),
               ),
@@ -187,24 +186,24 @@ class _FirewallScreenState extends ConsumerState<FirewallScreen> {
               error: (e, _) => Center(
                 child: Text('Could not load rules: $e',
                     style:
-                        const TextStyle(color: NcColors.textSecondary)),
+                        TextStyle(color: NcColors.textSecondary)),
               ),
               data: (rulesData) {
 
                 if (filtered.isEmpty) {
-                  return const Center(
+                  return Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.security_outlined,
                             size: 48, color: NcColors.textMuted),
-                        SizedBox(height: 12),
-                        Text('No rules yet',
+                        const SizedBox(height: 12),
+                        Text('No apps match the current filter',
                             style:
                                 TextStyle(color: NcColors.textSecondary)),
-                        SizedBox(height: 4),
+                        const SizedBox(height: 4),
                         Text(
-                          'Apps appear here when they request internet access.',
+                          'Start protection to load installed apps, or change the filter.',
                           style: TextStyle(
                               color: NcColors.textMuted, fontSize: 12),
                           textAlign: TextAlign.center,
@@ -224,6 +223,11 @@ class _FirewallScreenState extends ConsumerState<FirewallScreen> {
                       appId: rule.appId ?? 'Unknown App',
                       action: rule.action,
                       profileId: rule.profileId ?? 'default',
+                      displayName: rule.displayName,
+                      iconBytes: rule.iconBytes,
+                      riskLevel: rule.riskLevel,
+                      riskScore: rule.riskScore,
+                      riskReasons: rule.riskReasons,
                       onAllow: () => ref
                           .read(firewallRulesProvider.notifier)
                           .updateRuleAction(rule.appId ?? '', RuleAction.allow, profileId: rule.profileId),
@@ -261,6 +265,11 @@ class _AppRuleTile extends StatelessWidget {
     required this.onBlock,
     required this.onAsk,
     required this.onProfileChanged,
+    this.displayName,
+    this.iconBytes,
+    this.riskLevel,
+    this.riskScore,
+    this.riskReasons,
   });
 
   final String appId;
@@ -270,9 +279,20 @@ class _AppRuleTile extends StatelessWidget {
   final VoidCallback onBlock;
   final VoidCallback onAsk;
   final ValueChanged<String?> onProfileChanged;
+  final String? displayName;
+  final List<int>? iconBytes;
+  final String? riskLevel;
+  final int? riskScore;
+  final List<String>? riskReasons;
 
   @override
   Widget build(BuildContext context) {
+    // Resolve the label — prefer displayName, fall back to package name
+    final label = (displayName?.isNotEmpty == true) ? displayName! : appId;
+    // Derive a short package suffix for the subtitle (e.g. "com.example.app" -> "example.app")
+    final parts = appId.split('.');
+    final subtitle = parts.length > 2 ? parts.skip(1).join('.') : appId;
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -282,7 +302,7 @@ class _AppRuleTile extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // App icon placeholder
+          // App icon — real PNG from PackageManager, or placeholder
           Container(
             width: 44,
             height: 44,
@@ -290,18 +310,56 @@ class _AppRuleTile extends StatelessWidget {
               color: NcColors.surfaceElevated,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Icon(Icons.apps_outlined,
-                color: NcColors.textMuted, size: 22),
+            child: iconBytes != null && iconBytes!.isNotEmpty
+                ? ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.memory(
+                      Uint8List.fromList(iconBytes!),
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, __, ___) => Icon(
+                        Icons.apps_outlined,
+                        color: NcColors.textMuted,
+                        size: 22,
+                      ),
+                    ),
+                  )
+                : Icon(Icons.apps_outlined,
+                    color: NcColors.textMuted, size: 22),
           ),
           const SizedBox(width: 12),
-          // Name + chips + profile dropdown
+          // Name + package subtitle + chips + profile dropdown
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(appId,
-                    style: Theme.of(context).textTheme.titleMedium,
-                    overflow: TextOverflow.ellipsis),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: Theme.of(context).textTheme.titleMedium,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (riskLevel != null) ...[
+                      const SizedBox(width: 6),
+                      _RiskBadge(
+                        level: riskLevel!,
+                        score: riskScore ?? 0,
+                        reasons: riskReasons ?? [],
+                        appName: label,
+                      ),
+                    ],
+                  ],
+                ),
+                if (label != appId)
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                        color: NcColors.textMuted, fontSize: 10),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 const SizedBox(height: 6),
                 Row(
                   children: [
@@ -328,7 +386,7 @@ class _AppRuleTile extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    // Status chips
+                    // Status chips — one per enforcement context
                     Expanded(
                       child: SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
@@ -337,6 +395,8 @@ class _AppRuleTile extends StatelessWidget {
                             _StatusChip(label: 'Wi-Fi', action: action),
                             const SizedBox(width: 4),
                             _StatusChip(label: 'Cell', action: action),
+                            const SizedBox(width: 4),
+                            _StatusChip(label: 'LAN', action: action),
                             const SizedBox(width: 4),
                             _StatusChip(label: 'BG', action: action),
                           ],
@@ -379,30 +439,93 @@ class _AppRuleTile extends StatelessWidget {
 
 class _StatusChip extends StatelessWidget {
   const _StatusChip({required this.label, required this.action});
-  final String label;
+  final String label; // 'Wi-Fi' | 'Cell' | 'LAN' | 'BG'
   final RuleAction action;
 
-  Color get _color {
-    if (action == RuleAction.block || action == RuleAction.temporaryBlock) {
-      return NcColors.chipBlock;
+  /// Resolves the effective allow/block state for this specific context.
+  bool _isAllowed() {
+    switch (label) {
+      case 'Wi-Fi':
+        // On Wi-Fi (assumed not LAN), allowLanOnly blocks internet traffic.
+        switch (action) {
+          case RuleAction.block:
+          case RuleAction.temporaryBlock:
+            return false;
+          case RuleAction.allowLanOnly:
+            return false; // internet traffic on Wi-Fi is blocked by this rule
+          case RuleAction.screenOnOnly:
+            return false; // can't tell without runtime context — show blocked
+          case RuleAction.ask:
+            return false; // fails closed
+          default:
+            return true;
+        }
+      case 'Cell':
+        // On cellular there is no LAN — allowLanOnly effectively blocks all.
+        switch (action) {
+          case RuleAction.block:
+          case RuleAction.temporaryBlock:
+          case RuleAction.allowLanOnly:
+            return false;
+          case RuleAction.ask:
+            return false;
+          default:
+            return true;
+        }
+      case 'LAN':
+        // LAN access: allowInternetOnly blocks LAN destinations.
+        switch (action) {
+          case RuleAction.block:
+          case RuleAction.temporaryBlock:
+          case RuleAction.allowInternetOnly:
+            return false;
+          case RuleAction.ask:
+            return false;
+          default:
+            return true;
+        }
+      case 'BG':
+        // Background: blockBackground and screenOnOnly both restrict background.
+        switch (action) {
+          case RuleAction.block:
+          case RuleAction.temporaryBlock:
+          case RuleAction.blockBackground:
+          case RuleAction.screenOnOnly:
+            return false;
+          case RuleAction.ask:
+            return false;
+          default:
+            return true;
+        }
+      default:
+        return action != RuleAction.block &&
+            action != RuleAction.temporaryBlock &&
+            action != RuleAction.ask;
     }
+  }
+
+  Color get _color {
+    if (!_isAllowed()) return NcColors.chipBlock;
     if (action == RuleAction.ask) return NcColors.chipAsk;
     return NcColors.chipAllow;
   }
 
+  String get _statusLabel => _isAllowed() ? '✓' : '✗';
+
   @override
   Widget build(BuildContext context) {
+    final color = _color;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: _color.withValues(alpha: 0.1),
+        color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: _color.withValues(alpha: 0.4)),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Text(
-        '$label: ${action.label}',
+        '$label $_statusLabel',
         style: TextStyle(
-          color: _color,
+          color: color,
           fontSize: 10,
           fontWeight: FontWeight.w600,
         ),
@@ -438,6 +561,111 @@ class _QuickBtn extends StatelessWidget {
           ),
           child: Icon(icon, color: color, size: 16),
         ),
+      ),
+    );
+  }
+}
+
+class _RiskBadge extends StatelessWidget {
+  const _RiskBadge({
+    required this.level,
+    required this.score,
+    required this.reasons,
+    required this.appName,
+  });
+  final String level;
+  final int score;
+  final List<String> reasons;
+  final String appName;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color badgeColor;
+    final String label;
+
+    switch (level.toLowerCase()) {
+      case 'high':
+        badgeColor = Colors.redAccent;
+        label = 'High Risk ($score)';
+        break;
+      case 'medium':
+        badgeColor = Colors.orangeAccent;
+        label = 'Medium Risk ($score)';
+        break;
+      default:
+        badgeColor = Colors.greenAccent;
+        label = 'Safe';
+        return const SizedBox.shrink();
+    }
+
+    return GestureDetector(
+      onTap: () => _showReasonsDialog(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: badgeColor.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: badgeColor.withValues(alpha: 0.5)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: badgeColor,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showReasonsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: NcColors.surface,
+        title: Text(
+          '$appName Risk Profile',
+          style: const TextStyle(color: NcColors.primary),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Risk Score: $score/100 ($level)',
+              style: TextStyle(
+                color: level == 'high' ? Colors.redAccent : Colors.orangeAccent,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Identified indicators (LibreAV/MobSF heuristics):',
+              style: TextStyle(color: NcColors.textSecondary, fontSize: 13, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            if (reasons.isEmpty)
+              Text(
+                '• No critical permissions or debug flags detected.',
+                style: TextStyle(color: NcColors.textMuted, fontSize: 12),
+              )
+            else
+              ...reasons.map((r) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      '• $r',
+                      style: TextStyle(color: NcColors.textSecondary, fontSize: 12),
+                    ),
+                  )),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close', style: TextStyle(color: NcColors.primary)),
+          ),
+        ],
       ),
     );
   }

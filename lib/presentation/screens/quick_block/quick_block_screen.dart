@@ -31,7 +31,7 @@ class QuickBlockScreen extends ConsumerWidget {
               ),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -43,7 +43,7 @@ class QuickBlockScreen extends ConsumerWidget {
                             color: NcColors.textPrimary,
                           ),
                         ),
-                        SizedBox(height: 4),
+                        const SizedBox(height: 4),
                         Text(
                           'Instantly sever all internet access for toggled apps, bypassing standard firewall policy rules.',
                           style: TextStyle(
@@ -86,7 +86,7 @@ class QuickBlockScreen extends ConsumerWidget {
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(
                 child: Text('Could not load apps: $e',
-                    style: const TextStyle(color: NcColors.textSecondary)),
+                    style: TextStyle(color: NcColors.textSecondary)),
               ),
               data: (rulesData) {
                 // Get list of unique appIds from firewall rules
@@ -98,7 +98,7 @@ class QuickBlockScreen extends ConsumerWidget {
                     .toList();
 
                 if (appIds.isEmpty) {
-                  return const Center(
+                  return Center(
                     child: Text(
                       'No applications available.',
                       style: TextStyle(color: NcColors.textSecondary),
@@ -130,7 +130,7 @@ class QuickBlockScreen extends ConsumerWidget {
                               color: NcColors.surfaceElevated,
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: const Icon(Icons.apps_outlined,
+                            child: Icon(Icons.apps_outlined,
                                 color: NcColors.textMuted, size: 22),
                           ),
                           const SizedBox(width: 12),

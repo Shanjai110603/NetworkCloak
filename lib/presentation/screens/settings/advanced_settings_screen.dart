@@ -31,7 +31,7 @@ class AdvancedSettingsScreen extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'Reset Firewall Rules',
                   style: TextStyle(
                     fontSize: 15,
@@ -40,7 +40,7 @@ class AdvancedSettingsScreen extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
+                Text(
                   'Restore all application firewall rules to default factory settings. Your custom app rules will be overwritten.',
                   style: TextStyle(
                     fontSize: 13,
@@ -78,7 +78,7 @@ class AdvancedSettingsScreen extends ConsumerWidget {
             ),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -90,7 +90,7 @@ class AdvancedSettingsScreen extends ConsumerWidget {
                           color: NcColors.textPrimary,
                         ),
                       ),
-                      SizedBox(height: 4),
+                      const SizedBox(height: 4),
                       Text(
                         'Collect advanced stack traces and log UDP packet flows locally for connection troubleshooting.',
                         style: TextStyle(
@@ -131,7 +131,7 @@ class AdvancedSettingsScreen extends ConsumerWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: NcColors.textSecondary)),
+            child: Text('Cancel', style: TextStyle(color: NcColors.textSecondary)),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: NcColors.chipBlock),

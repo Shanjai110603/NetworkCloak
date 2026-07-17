@@ -14,7 +14,9 @@ class DnsGuardScreen extends ConsumerWidget {
     ('Google', '🌐', 'DoH · 8.8.8.8', '8.8.8.8'),
     ('AdGuard', '🛡️', 'DoH · 94.140.14.14', '94.140.14.14'),
     ('System Default', '⚙️', 'OS resolver', 'system'),
-    ('Custom', '✏️', 'User-defined', 'custom'),
+    // 'Custom' has a special onTap that opens a configuration dialog
+    // instead of calling selectProvider with a placeholder value.
+    ('Custom', '✏️', 'User-defined DoH endpoint', '__custom__'),
   ];
 
   static const _categories = [
@@ -59,9 +61,15 @@ class DnsGuardScreen extends ConsumerWidget {
                   emoji: p.$2,
                   subtitle: p.$3,
                   isSelected: dnsProfile.name.toLowerCase() == p.$1.toLowerCase(),
-                  onTap: () => ref
-                      .read(dnsProfileProvider.notifier)
-                      .selectProvider(p.$1, p.$4),
+                  onTap: () {
+                    if (p.$4 == '__custom__') {
+                      _showCustomDnsDialog(context, ref);
+                    } else {
+                      ref
+                          .read(dnsProfileProvider.notifier)
+                          .selectProvider(p.$1, p.$4);
+                    }
+                  },
                 ),
               ))),
 
@@ -117,7 +125,7 @@ class DnsGuardScreen extends ConsumerWidget {
               children: [
                 Text(
                   configString,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: NcColors.textSecondary,
                     fontFamily: 'monospace',
                     fontSize: 12,
@@ -151,7 +159,7 @@ class DnsGuardScreen extends ConsumerWidget {
                         onPressed: () => _showImportDialog(context, ref),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: NcColors.textSecondary,
-                          side: const BorderSide(color: NcColors.border),
+                          side: BorderSide(color: NcColors.border),
                         ),
                       ),
                     ),
@@ -162,6 +170,88 @@ class DnsGuardScreen extends ConsumerWidget {
           ),
 
           const SizedBox(height: 80),
+        ],
+      ),
+    );
+  }
+
+  /// Opens a dialog to configure a custom DoH endpoint.
+  ///
+  /// The DoH URL must be an IP-literal (e.g. https://94.140.14.14/dns-query)
+  /// to avoid a DNS bootstrapping loop when the VPN is active. The TLS
+  /// hostname is used for certificate validation against the correct name.
+  void _showCustomDnsDialog(BuildContext context, WidgetRef ref) {
+    final urlCtrl = TextEditingController();
+    final hostCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: NcColors.surface,
+        title: const Text('Custom DoH Resolver'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Use an IP-literal URL to avoid DNS bootstrap loops (e.g. https://1.2.3.4/dns-query).',
+              style: TextStyle(fontSize: 12, color: NcColors.textSecondary),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: urlCtrl,
+              keyboardType: TextInputType.url,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              decoration: const InputDecoration(
+                labelText: 'DoH URL',
+                hintText: 'https://1.2.3.4/dns-query',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: hostCtrl,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              decoration: const InputDecoration(
+                labelText: 'TLS Certificate Hostname',
+                hintText: 'dns.example.com',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'The TLS hostname is used for certificate validation — it should match the FQDN of your resolver, not the IP.',
+              style: TextStyle(fontSize: 11, color: NcColors.textMuted),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel', style: TextStyle(color: NcColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final url = urlCtrl.text.trim();
+              final hostname = hostCtrl.text.trim();
+              if (url.startsWith('https://') && hostname.isNotEmpty) {
+                // selectProvider receives doHUrl + doHHostname via native bridge
+                ref.read(dnsProfileProvider.notifier)
+                    .selectProvider('Custom', url, doHHostname: hostname);
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Custom DoH resolver set: $hostname')),
+                );
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('URL must start with https:// and hostname must not be empty.'),
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: NcColors.primary),
+            child: const Text('Save'),
+          ),
         ],
       ),
     );
@@ -178,7 +268,7 @@ class DnsGuardScreen extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Paste a valid base64-encoded Network Cloak DNS Stamp (starts with NC-DNS-v1:)',
               style: TextStyle(fontSize: 12, color: NcColors.textSecondary),
             ),
@@ -197,7 +287,7 @@ class DnsGuardScreen extends ConsumerWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: NcColors.textSecondary)),
+            child: Text('Cancel', style: TextStyle(color: NcColors.textSecondary)),
           ),
           ElevatedButton(
             onPressed: () {
@@ -328,7 +418,7 @@ class _BlocklistRow extends StatelessWidget {
                 ),
         ),
         if (!isLast)
-          const Divider(
+          Divider(
               height: 0, indent: 16, endIndent: 16, color: NcColors.border),
       ],
     );

@@ -186,4 +186,47 @@ class PlatformChannelBridge
     final result = await _method.invokeMethod<int>('getRetentionDays');
     return result ?? 30;
   }
+
+  Future<void> setSecurityRiskIndicatorsEnabled(bool enabled) async {
+    await _method.invokeMethod('setSecurityRiskIndicatorsEnabled', {'enabled': enabled});
+  }
+
+  Future<bool> getSecurityRiskIndicatorsEnabled() async {
+    final result = await _method.invokeMethod<bool>('getSecurityRiskIndicatorsEnabled');
+    return result ?? true;
+  }
+
+  Future<void> setCloakEnabled(bool enabled) async {
+    await _method.invokeMethod('setCloakEnabled', {'enabled': enabled});
+  }
+
+  Future<bool> getCloakEnabled() async {
+    final result = await _method.invokeMethod<bool>('getCloakEnabled');
+    return result ?? false;
+  }
+
+  Future<void> setThemeLightEnabled(bool enabled) async {
+    await _method.invokeMethod('setThemeLightEnabled', {'enabled': enabled});
+  }
+
+  Future<bool> getThemeLightEnabled() async {
+    final result = await _method.invokeMethod<bool>('getThemeLightEnabled');
+    return result ?? false;
+  }
+
+  /// Fetches all installed apps from the Android PackageManager.
+  ///
+  /// Returns a list of raw maps with keys:
+  ///   packageName, displayName, version, isSystem, iconBase64
+  ///
+  /// Call this once at Firewall screen load time; cache the result
+  /// in [installedAppsProvider] so repeated navigations don't re-query.
+  Future<List<Map<String, dynamic>>> getInstalledApps() async {
+    final result = await _method.invokeMethod<List>('getInstalledApps');
+    if (result == null) return [];
+    return result
+        .whereType<Map>()
+        .map((m) => Map<String, dynamic>.from(m))
+        .toList();
+  }
 }

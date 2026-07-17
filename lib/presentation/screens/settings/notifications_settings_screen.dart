@@ -25,7 +25,7 @@ class NotificationsSettingsScreen extends ConsumerWidget {
             ),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -37,7 +37,7 @@ class NotificationsSettingsScreen extends ConsumerWidget {
                           color: NcColors.textPrimary,
                         ),
                       ),
-                      SizedBox(height: 4),
+                      const SizedBox(height: 4),
                       Text(
                         'Show immediate system-tray notifications for critical firewall blocks and anomalies.',
                         style: TextStyle(
@@ -60,8 +60,8 @@ class NotificationsSettingsScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 16),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 4),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Text(
               'All alerts are always recorded in the Watchtower/Alerts log regardless of this system notification setting.',
               style: TextStyle(fontSize: 12, color: NcColors.textMuted, height: 1.4),

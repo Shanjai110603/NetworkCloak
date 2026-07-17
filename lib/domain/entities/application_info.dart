@@ -8,6 +8,9 @@ class ApplicationInfo {
     required this.firstSeen,
     this.iconBytes,
     this.isSystem = false,
+    this.riskLevel,
+    this.riskScore,
+    this.riskReasons,
   });
 
   final String id;
@@ -17,6 +20,9 @@ class ApplicationInfo {
   final DateTime firstSeen;
   final List<int>? iconBytes; // PNG bytes from PackageManager
   final bool isSystem;
+  final String? riskLevel;
+  final int? riskScore;
+  final List<String>? riskReasons;
 }
 
 /// Per-app bandwidth & connection statistics for a given period.

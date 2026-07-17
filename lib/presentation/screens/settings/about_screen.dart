@@ -35,7 +35,7 @@ class AboutScreen extends StatelessWidget {
                       )
                     ],
                   ),
-                  child: const Icon(
+                  child: Icon(
                     Icons.security,
                     size: 48,
                     color: NcColors.bg,
@@ -44,7 +44,7 @@ class AboutScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 24),
-            const Text(
+            Text(
               'Network Cloak',
               style: TextStyle(
                 fontSize: 24,
@@ -54,7 +54,7 @@ class AboutScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'Stealth Connection Shield v1.0.0',
               style: TextStyle(
                 fontSize: 14,
@@ -70,19 +70,19 @@ class AboutScreen extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: NcColors.border),
               ),
-              child: const Column(
+              child: Column(
                 children: [
-                  _InfoRow(label: 'Developer', value: 'Security Team'),
+                  const _InfoRow(label: 'Developer', value: 'Security Team'),
                   Divider(height: 24, color: NcColors.border),
-                  _InfoRow(label: 'License', value: 'MIT Open Source'),
+                  const _InfoRow(label: 'License', value: 'MIT Open Source'),
                   Divider(height: 24, color: NcColors.border),
-                  _InfoRow(label: 'Privacy', value: '100% On-Device'),
+                  const _InfoRow(label: 'Privacy', value: '100% On-Device'),
                 ],
               ),
             ),
             const SizedBox(height: 32),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Text(
                 'Designed for complete data sovereignty. Network Cloak routes all packet filtration rules on-device and never communicates logs, alerts, or traffic packets to third-party cloud servers.',
                 style: TextStyle(
@@ -94,7 +94,7 @@ class AboutScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 48),
-            const Text(
+            Text(
               '© 2026 Network Cloak Contributors',
               style: TextStyle(
                 fontSize: 11,
@@ -119,7 +119,7 @@ class _InfoRow extends StatelessWidget {
       children: [
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 14,
             color: NcColors.textSecondary,
             fontWeight: FontWeight.w500,
@@ -127,7 +127,7 @@ class _InfoRow extends StatelessWidget {
         ),
         Text(
           value,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 14,
             color: NcColors.textPrimary,
             fontWeight: FontWeight.bold,

@@ -134,7 +134,7 @@ class _OnboardingFlowState extends ConsumerState<OnboardingFlow> {
                             const SizedBox(height: 12),
                             TextButton(
                               onPressed: () => _page.value = page - 1,
-                              child: const Text('Back',
+                              child: Text('Back',
                                   style: TextStyle(
                                       color: NcColors.textSecondary)),
                             ),
@@ -142,7 +142,7 @@ class _OnboardingFlowState extends ConsumerState<OnboardingFlow> {
                             const SizedBox(height: 12),
                             TextButton(
                               onPressed: () => context.go('/'),
-                              child: const Text('Skip setup',
+                              child: Text('Skip setup',
                                   style: TextStyle(
                                       color: NcColors.textMuted)),
                             ),

@@ -120,7 +120,7 @@ class ShieldScreen extends ConsumerWidget {
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: NcColors.border),
                   ),
-                  child: const Center(
+                  child: Center(
                     child: Text(
                       'No trusted networks yet.\nConnect to a network and tap "Trust this network".',
                       style: TextStyle(color: NcColors.textSecondary),
@@ -140,7 +140,7 @@ class ShieldScreen extends ConsumerWidget {
                   children: networks.map((net) {
                     return ListTile(
                       title: Text(net.ssid, style: const TextStyle(fontWeight: FontWeight.w600)),
-                      subtitle: Text(net.bssid, style: const TextStyle(color: NcColors.textSecondary)),
+                      subtitle: Text(net.bssid, style: TextStyle(color: NcColors.textSecondary)),
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline, color: NcColors.unprotected),
                         onPressed: () async {

@@ -18,16 +18,24 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (prefs.getBoolean(KEY_WAS_ACTIVE, false)) {
-            // VPN was running when the device shut down — restart it.
-            val serviceIntent = Intent(context, NetworkCloakVpnService::class.java)
-                .putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START)
-            context.startForegroundService(serviceIntent)
+        val lastMode = prefs.getString(KEY_LAST_MODE, null) ?: return
+
+        when (lastMode) {
+            "FULL" -> {
+                val serviceIntent = Intent(context, NetworkCloakVpnService::class.java)
+                    .putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START)
+                context.startForegroundService(serviceIntent)
+            }
+            "QUICK_BLOCK" -> {
+                val serviceIntent = Intent(context, NetworkCloakVpnService::class.java)
+                    .putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START_QUICK_BLOCK)
+                context.startForegroundService(serviceIntent)
+            }
         }
     }
 
     companion object {
         const val PREFS_NAME = "nc_prefs"
-        const val KEY_WAS_ACTIVE = "protection_was_active"
+        const val KEY_LAST_MODE = "last_vpn_mode"
     }
 }

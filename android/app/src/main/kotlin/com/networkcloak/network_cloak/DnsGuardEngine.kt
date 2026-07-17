@@ -54,6 +54,8 @@ object DnsGuardEngine {
     // ── VPN service lifecycle (WeakReference to prevent leak across restarts) ──
     private var vpnRef: WeakReference<NetworkCloakVpnService>? = null
 
+    val isAttached: Boolean get() = vpnRef != null
+
     /**
      * Called from NetworkCloakVpnService.startVpn().
      * Must be called before any DNS packet is processed so protect() is available.
@@ -115,6 +117,14 @@ object DnsGuardEngine {
                     message   = "Your DNS settings were upgraded to encrypted DNS (DoH). " +
                                 "If you used a custom resolver, please re-configure in DNS Guard settings.",
                 )
+                vpnRef?.get()?.let { ctx ->
+                    NativeEventBus.postSystemNotification(
+                        context = ctx,
+                        title = "DNS encryption upgraded",
+                        body = "Your DNS settings were upgraded to encrypted DNS (DoH).",
+                        severity = "warning"
+                    )
+                }
             }
         }
     }

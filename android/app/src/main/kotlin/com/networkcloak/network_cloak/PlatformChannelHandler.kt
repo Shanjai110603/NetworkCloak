@@ -2,7 +2,13 @@ package com.networkcloak.network_cloak
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
 import android.net.VpnService
+import android.util.Base64
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -11,11 +17,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
 /**
- * Bridges Flutter ↔ Android via two channels:
- *   com.networkcloak/commands  (MethodChannel)  — control commands from Flutter
- *   com.networkcloak/events    (EventChannel)   — async events to Flutter
+ * Bridges Flutter ? Android via two channels:
+ *   com.networkcloak/commands  (MethodChannel)  � control commands from Flutter
+ *   com.networkcloak/events    (EventChannel)   � async events to Flutter
  */
 object PlatformChannelHandler {
 
@@ -26,12 +34,12 @@ object PlatformChannelHandler {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     fun register(context: Context, binaryMessenger: BinaryMessenger) {
-        // ── Method channel ───────────────────────────────────
+        // -- Method channel -----------------------------------
         MethodChannel(binaryMessenger, METHOD_CHANNEL).setMethodCallHandler { call, result ->
             handleMethod(context, call, result)
         }
 
-        // ── Event channel ────────────────────────────────────
+        // -- Event channel ------------------------------------
         EventChannel(binaryMessenger, EVENT_CHANNEL).setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -69,7 +77,7 @@ object PlatformChannelHandler {
                     activity?.startActivityForResult(vpnIntent, 1003)
                     result.success(false) // Not started yet, waiting for result callback in MainActivity
                 } else {
-                    // Already prepared — start the service directly
+                    // Already prepared � start the service directly
                     val intent = Intent(context, NetworkCloakVpnService::class.java).apply {
                         putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START)
                     }
@@ -187,6 +195,118 @@ object PlatformChannelHandler {
                     .getInt("retentionDays", 30)
                 result.success(days)
             }
+            "setSecurityRiskIndicatorsEnabled" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: true
+                context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("showSecurityRiskIndicators", enabled)
+                    .apply()
+                result.success(null)
+            }
+            "getSecurityRiskIndicatorsEnabled" -> {
+                val enabled = context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .getBoolean("showSecurityRiskIndicators", true)
+                result.success(enabled)
+            }
+            "setCloakEnabled" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("cloakEnabled", enabled)
+                    .apply()
+                RuleRepository.cloakEnabled = enabled
+                refreshVpnService(context)
+                result.success(null)
+            }
+            "getCloakEnabled" -> {
+                val enabled = context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .getBoolean("cloakEnabled", false)
+                RuleRepository.cloakEnabled = enabled
+                result.success(enabled)
+            }
+            "setThemeLightEnabled" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("themeLightEnabled", enabled)
+                    .apply()
+                result.success(null)
+            }
+            "getThemeLightEnabled" -> {
+                val enabled = context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .getBoolean("themeLightEnabled", false)
+                result.success(enabled)
+            }
+            "getInstalledApps" -> {
+                // Runs on IO � PackageManager is blocking.
+                // Returns ALL installed apps (user + relevant system) with:
+                //   packageName, displayName, version, isSystem, iconBase64 (PNG),
+                //   and (if showSecurityRiskIndicators == true): riskScore, riskLevel, riskReasons.
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val pm = context.packageManager
+                        val flags = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                            PackageManager.GET_META_DATA
+                        } else {
+                            PackageManager.GET_META_DATA
+                        }
+                        val apps = pm.getInstalledApplications(flags)
+
+                        val prefs = context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                        val showRisk = prefs.getBoolean("showSecurityRiskIndicators", true)
+
+                        val list = mutableListOf<Map<String, Any?>>()
+                        for (app in apps) {
+                            // Skip our own package to avoid recursive rules
+                            if (app.packageName == context.packageName) continue
+
+                            val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+
+                            // Try to get icon as base64 PNG; null if it fails
+                            val iconBase64 = try {
+                                val drawable = pm.getApplicationIcon(app.packageName)
+                                drawableToPngBase64(drawable)
+                            } catch (_: Exception) { null }
+
+                            val versionName = try {
+                                pm.getPackageInfo(app.packageName, 0).versionName
+                            } catch (_: Exception) { null }
+
+                            val appMap = mutableMapOf<String, Any?>(
+                                "packageName"  to app.packageName,
+                                "displayName"  to (pm.getApplicationLabel(app).toString()),
+                                "version"      to versionName,
+                                "isSystem"     to isSystem,
+                                "iconBase64"   to iconBase64
+                            )
+
+                            // Evaluate security risks only if enabled via feature flag
+                            if (showRisk) {
+                                val report = AppRiskHeuristics.evaluate(context, app)
+                                appMap["riskScore"] = report.score
+                                appMap["riskLevel"] = report.level
+                                appMap["riskReasons"] = report.reasons
+                            }
+
+                            list.add(appMap)
+                        }
+
+                        // Sort: user apps first, then alphabetically by displayName
+                        val sorted = list.sortedWith(
+                            compareBy<Map<String, Any?>> { it["isSystem"] as? Boolean == true }
+                                .thenBy { (it["displayName"] as? String)?.lowercase() ?: "" }
+                        )
+
+                        withContext(Dispatchers.Main) {
+                            result.success(sorted)
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            result.error("GET_APPS_FAILED", e.message, null)
+                        }
+                    }
+                }
+            }
             else -> result.notImplemented()
         }
     }
@@ -216,6 +336,23 @@ object PlatformChannelHandler {
                 .putExtra(NetworkCloakVpnService.ACTION_KEY, "refresh")
             context.startService(intent)
         }
+    }
+
+    /** Converts any Drawable to a base64-encoded PNG byte string for the platform channel. */
+    private fun drawableToPngBase64(drawable: android.graphics.drawable.Drawable): String {
+        val size = 96 // 96�96 px is sufficient for list tiles
+        val bmp = if (drawable is BitmapDrawable && drawable.bitmap != null) {
+            Bitmap.createScaledBitmap(drawable.bitmap, size, size, true)
+        } else {
+            val bmp2 = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp2)
+            drawable.setBounds(0, 0, canvas.width, canvas.height)
+            drawable.draw(canvas)
+            bmp2
+        }
+        val baos = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.PNG, 100, baos)
+        return Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
     }
 
     /** Called from native code to push an event to Flutter. */
