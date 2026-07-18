@@ -123,11 +123,14 @@ class PlatformChannelBridge
 
   // ── Event stream helpers (for Riverpod StreamProviders) ───
 
-  /// Live connection events from the VPN engine.
-  Stream<Map<String, dynamic>> get connectionEvents {
+  /// Live connection events from the VPN engine (batched).
+  Stream<List<Map<String, dynamic>>> get connectionEvents {
     return _events
-        .where((e) => (e as Map?)?['type'] == 'ConnectionEvent')
-        .map((e) => Map<String, dynamic>.from(e as Map));
+        .where((e) => (e as Map?)?['type'] == 'ConnectionEventsBatch')
+        .map((e) => (e as Map)['events']
+            .cast<Map<dynamic, dynamic>>()
+            .map<Map<String, dynamic>>((item) => Map<String, dynamic>.from(item))
+            .toList());
   }
 
   /// VPN protection state changes (connected / disconnected).
@@ -211,6 +214,15 @@ class PlatformChannelBridge
 
   Future<bool> getThemeLightEnabled() async {
     final result = await _method.invokeMethod<bool>('getThemeLightEnabled');
+    return result ?? false;
+  }
+
+  Future<void> setDebugLoggingEnabled(bool enabled) async {
+    await _method.invokeMethod('setDebugLoggingEnabled', {'enabled': enabled});
+  }
+
+  Future<bool> getDebugLoggingEnabled() async {
+    final result = await _method.invokeMethod<bool>('getDebugLoggingEnabled');
     return result ?? false;
   }
 

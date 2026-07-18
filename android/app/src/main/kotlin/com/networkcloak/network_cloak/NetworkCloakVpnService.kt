@@ -379,6 +379,12 @@ class NetworkCloakVpnService : VpnService() {
             context      = context,
         )
 
+        val debugLogEnabled = getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+            .getBoolean("debugLoggingEnabled", false)
+        if (debugLogEnabled) {
+            Log.d(TAG, "Packet: proto=$protocolStr, app=$appId, src=$srcIp:$srcPort, dest=$dstIp:$dstPort, decision=$decision, bg=$isBackground")
+        }
+
         // ── Enforcement ───────────────────────────────────────────
 
         // TCP: Option B active — ALL TCP is rejected with RST regardless of

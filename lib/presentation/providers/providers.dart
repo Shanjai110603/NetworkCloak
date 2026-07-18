@@ -24,6 +24,7 @@ import '../../domain/entities/dns_profile.dart';
 import '../../domain/enums/dns_protocol.dart';
 import '../../domain/usecases/shield/classify_network_use_case.dart';
 import '../../platform/platform_channel_bridge.dart';
+import '../../data/fixtures/blocklists.dart';
 
 // ─────────────────────────────────────────────────────────────
 // Infrastructure Providers
@@ -482,18 +483,20 @@ final liveConnectionsProvider = StreamProvider<List<LiveConnection>>((ref) async
   final list = <LiveConnection>[];
   yield list;
 
-  await for (final e in bridge.connectionEvents) {
-    final conn = LiveConnection(
-      id: '${e['uid']}_${e['timestamp']}',
-      appId: e['appId'] as String? ?? 'unknown',
-      dest: e['destHost'] as String? ?? e['destIp'] as String? ?? '?',
-      protocol: e['protocol'] as String? ?? 'TCP',
-      startedAt: DateTime.fromMillisecondsSinceEpoch(
-          e['timestamp'] as int? ?? 0),
-      bytes: e['bytes'] as int? ?? 0,
-    );
-    list.insert(0, conn);
-    if (list.length > 200) list.removeLast();
+  await for (final batch in bridge.connectionEvents) {
+    for (final e in batch) {
+      final conn = LiveConnection(
+        id: '${e['uid']}_${e['timestamp']}',
+        appId: e['appId'] as String? ?? 'unknown',
+        dest: e['destHost'] as String? ?? e['destIp'] as String? ?? '?',
+        protocol: e['protocol'] as String? ?? 'TCP',
+        startedAt: DateTime.fromMillisecondsSinceEpoch(
+            e['timestamp'] as int? ?? 0),
+        bytes: e['bytes'] as int? ?? 0,
+      );
+      list.insert(0, conn);
+      if (list.length > 200) list.removeLast();
+    }
     yield List<LiveConnection>.from(list);
   }
 });
@@ -565,44 +568,46 @@ class AlertsNotifier extends StateNotifier<List<Alert>> {
   }
 
   void _monitorConnectionAnomalies() {
-    _bridge.connectionEvents.listen((e) async {
-      final appId = e['appId'] as String? ?? 'unknown';
-      if (appId == 'unknown' || appId == 'dns' || appId == 'system') return;
+    _bridge.connectionEvents.listen((batch) async {
+      for (final e in batch) {
+        final appId = e['appId'] as String? ?? 'unknown';
+        if (appId == 'unknown' || appId == 'dns' || appId == 'system') continue;
 
-      final now = DateTime.now();
-      final times = _connectionHistory.putIfAbsent(appId, () => []);
-      times.add(now);
+        final now = DateTime.now();
+        final times = _connectionHistory.putIfAbsent(appId, () => []);
+        times.add(now);
 
-      // Remove connections older than 60 seconds
-      times.removeWhere((t) => now.difference(t).inSeconds > 60);
+        // Remove connections older than 60 seconds
+        times.removeWhere((t) => now.difference(t).inSeconds > 60);
 
-      // Threshold: 40 connections in 60 seconds
-      if (times.length > 40) {
-        final lastAlert = _lastAnomalyAlert[appId];
-        if (lastAlert == null || now.difference(lastAlert).inMinutes >= 2) {
-          _lastAnomalyAlert[appId] = now;
+        // Threshold: 40 connections in 60 seconds
+        if (times.length > 40) {
+          final lastAlert = _lastAnomalyAlert[appId];
+          if (lastAlert == null || now.difference(lastAlert).inMinutes >= 2) {
+            _lastAnomalyAlert[appId] = now;
 
-          final alert = Alert(
-            id: 'anomaly_${now.millisecondsSinceEpoch}_$appId',
-            type: 'anomaly',
-            severity: 'warning',
-            title: 'Unusual Network Activity',
-            body: '$appId is connecting to an unusually high number of servers. Tap to review.',
-            appId: appId,
-            status: 'unread',
-            createdAt: now,
-          );
+            final alert = Alert(
+              id: 'anomaly_${now.millisecondsSinceEpoch}_$appId',
+              type: 'anomaly',
+              severity: 'warning',
+              title: 'Unusual Network Activity',
+              body: '$appId is connecting to an unusually high number of servers. Tap to review.',
+              appId: appId,
+              status: 'unread',
+              createdAt: now,
+            );
 
-          state = [alert, ...state];
-          await _db.into(_db.alerts).insert(AlertsCompanion.insert(
-                id: alert.id,
-                type: alert.type,
-                severity: alert.severity,
-                title: alert.title,
-                body: alert.body,
-                appId: Value(alert.appId),
-                createdAt: alert.createdAt.millisecondsSinceEpoch,
-              ));
+            state = [alert, ...state];
+            await _db.into(_db.alerts).insert(AlertsCompanion.insert(
+                  id: alert.id,
+                  type: alert.type,
+                  severity: alert.severity,
+                  title: alert.title,
+                  body: alert.body,
+                  appId: Value(alert.appId),
+                  createdAt: alert.createdAt.millisecondsSinceEpoch,
+                ));
+          }
         }
       }
     });
@@ -656,8 +661,21 @@ final dnsProfileProvider = StateNotifierProvider<DnsProfileNotifier, DnsProfile>
 });
 
 class DnsProfileNotifier extends StateNotifier<DnsProfile> {
-  DnsProfileNotifier(this._ref) : super(DnsProfile.defaultProfile);
+  DnsProfileNotifier(this._ref) : super(DnsProfile.defaultProfile) {
+    _syncAllCategories();
+  }
   final Ref _ref;
+
+  Future<void> _syncAllCategories() async {
+    final List<Map<String, dynamic>> lists = [];
+    for (final cat in state.enabledCategories) {
+      lists.add({
+        'category': cat,
+        'domains': kDnsBlocklists[cat] ?? [],
+      });
+    }
+    await _ref.read(platformBridgeProvider).updateBlocklists(lists);
+  }
 
   Future<void> selectProvider(String name, String endpoint, {String? doHHostname}) async {
     // If endpoint is already a full https:// URL (e.g. from the custom dialog),
@@ -692,6 +710,7 @@ class DnsProfileNotifier extends StateNotifier<DnsProfile> {
         'doHHostname': resolvedHostname,
       });
     }
+    await _syncAllCategories();
   }
 
   static String _resolverHostname(String providerName) {
@@ -718,12 +737,7 @@ class DnsProfileNotifier extends StateNotifier<DnsProfile> {
       endpoint: state.endpoint,
       enabledCategories: categories,
     );
-    await _ref.read(platformBridgeProvider).updateBlocklists([
-      {
-        'category': category,
-        'domains': [], // Native implementation dynamically updates domains
-      }
-    ]);
+    await _syncAllCategories();
   }
 }
 
@@ -816,6 +830,24 @@ class SecurityRiskIndicatorsNotifier extends StateNotifier<bool> {
   }
 }
 
+final debugLoggingProvider = StateNotifierProvider<DebugLoggingNotifier, bool>((ref) {
+  return DebugLoggingNotifier(ref);
+});
+
+class DebugLoggingNotifier extends StateNotifier<bool> {
+  DebugLoggingNotifier(this._ref) : super(false) {
+    _init();
+  }
+  final Ref _ref;
+  Future<void> _init() async {
+    final val = await _ref.read(platformBridgeProvider).getDebugLoggingEnabled();
+    state = val;
+  }
+  Future<void> setEnabled(bool enabled) async {
+    state = enabled;
+    await _ref.read(platformBridgeProvider).setDebugLoggingEnabled(enabled);
+  }
+}
 
 final autoSwitchEnabledProvider = StateNotifierProvider<AutoSwitchEnabledNotifier, bool>((ref) {
   return AutoSwitchEnabledNotifier();
@@ -1036,11 +1068,13 @@ class ThroughputNotifier extends StateNotifier<ThroughputState> {
 
   void _startListening() {
     final bridge = _ref.read(platformBridgeProvider);
-    _sub = bridge.connectionEvents.listen((e) {
-      final int bytes = e['bytes'] as int? ?? 0;
-      // Filter out 'dns' or UID=-1 if desired, but here we track total aggregate throughput
-      _bytesAccumulatedInSecond += bytes;
-      _totalBytesAccumulated += bytes;
+    _sub = bridge.connectionEvents.listen((batch) {
+      for (final e in batch) {
+        final int bytes = e['bytes'] as int? ?? 0;
+        // Filter out 'dns' or UID=-1 if desired, but here we track total aggregate throughput
+        _bytesAccumulatedInSecond += bytes;
+        _totalBytesAccumulated += bytes;
+      }
     });
 
     _timer = Timer.periodic(const Duration(seconds: 1), (t) {

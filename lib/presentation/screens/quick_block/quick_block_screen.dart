@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/providers.dart';
@@ -113,6 +114,8 @@ class QuickBlockScreen extends ConsumerWidget {
                   itemBuilder: (ctx, i) {
                     final appId = appIds[i]!;
                     final isBlocked = quickBlockState.apps.contains(appId);
+                    final rule = rules.firstWhere((r) => r.appId == appId);
+                    final label = (rule.displayName?.isNotEmpty == true) ? rule.displayName! : appId;
 
                     return Container(
                       padding: const EdgeInsets.all(12),
@@ -130,15 +133,43 @@ class QuickBlockScreen extends ConsumerWidget {
                               color: NcColors.surfaceElevated,
                               borderRadius: BorderRadius.circular(10),
                             ),
-                            child: Icon(Icons.apps_outlined,
-                                color: NcColors.textMuted, size: 22),
+                            child: rule.iconBytes != null && rule.iconBytes!.isNotEmpty
+                                ? ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: Image.memory(
+                                      Uint8List.fromList(rule.iconBytes!),
+                                      fit: BoxFit.cover,
+                                      gaplessPlayback: true,
+                                      errorBuilder: (_, __, ___) => Icon(
+                                        Icons.apps_outlined,
+                                        color: NcColors.textMuted,
+                                        size: 22,
+                                      ),
+                                    ),
+                                  )
+                                : Icon(Icons.apps_outlined,
+                                    color: NcColors.textMuted, size: 22),
                           ),
                           const SizedBox(width: 12),
                           Expanded(
-                            child: Text(
-                              appId,
-                              style: Theme.of(context).textTheme.titleMedium,
-                              overflow: TextOverflow.ellipsis,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  label,
+                                  style: Theme.of(context).textTheme.titleMedium,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                if (label != appId)
+                                  Text(
+                                    appId,
+                                    style: TextStyle(
+                                      color: NcColors.textMuted,
+                                      fontSize: 10,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                              ],
                             ),
                           ),
                           Switch(

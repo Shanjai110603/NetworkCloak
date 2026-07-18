@@ -7,6 +7,10 @@ import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * In-process event bus from native components → PlatformChannelHandler.
@@ -21,6 +25,31 @@ object NativeEventBus {
     private var nextNotificationId = 5000
 
     private var listener: ((Map<String, Any?>) -> Unit)? = null
+
+    // Buffer for connection events (D1) to prevent EventChannel flooding
+    private val connectionEventBuffer = java.util.Collections.synchronizedList(mutableListOf<Map<String, Any?>>())
+
+    init {
+        CoroutineScope(Dispatchers.Default).launch {
+            while (true) {
+                delay(500)
+                flushConnectionEvents()
+            }
+        }
+    }
+
+    private fun flushConnectionEvents() {
+        val batch = synchronized(connectionEventBuffer) {
+            if (connectionEventBuffer.isEmpty()) return
+            val copy = ArrayList(connectionEventBuffer)
+            connectionEventBuffer.clear()
+            copy
+        }
+        post(mapOf(
+            "type" to "ConnectionEventsBatch",
+            "events" to batch
+        ))
+    }
 
     fun register(onEvent: (Map<String, Any?>) -> Unit) {
         listener = onEvent
@@ -69,8 +98,7 @@ object NativeEventBus {
         bytes: Int,
         allowed: Boolean,
     ) {
-        post(mapOf(
-            "type"      to "ConnectionEvent",
+        connectionEventBuffer.add(mapOf(
             "uid"       to uid,
             "appId"     to appId,
             "destHost"  to destHost,

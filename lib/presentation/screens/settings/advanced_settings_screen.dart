@@ -9,6 +9,7 @@ class AdvancedSettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final db = ref.watch(databaseProvider);
+    final debugLogging = ref.watch(debugLoggingProvider);
 
     return Scaffold(
       backgroundColor: NcColors.bg,
@@ -104,11 +105,14 @@ class AdvancedSettingsScreen extends ConsumerWidget {
                 ),
                 const SizedBox(width: 16),
                 Switch(
-                  value: false, // mock/unused debug mode toggle
-                  onChanged: (val) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Debug logging configured')),
-                    );
+                  value: debugLogging,
+                  onChanged: (val) async {
+                    await ref.read(debugLoggingProvider.notifier).setEnabled(val);
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Debug logging ${val ? 'enabled' : 'disabled'}')),
+                      );
+                    }
                   },
                 ),
               ],

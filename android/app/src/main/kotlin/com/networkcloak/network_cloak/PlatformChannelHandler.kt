@@ -208,6 +208,19 @@ object PlatformChannelHandler {
                     .getBoolean("showSecurityRiskIndicators", true)
                 result.success(enabled)
             }
+            "setDebugLoggingEnabled" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("debugLoggingEnabled", enabled)
+                    .apply()
+                result.success(null)
+            }
+            "getDebugLoggingEnabled" -> {
+                val enabled = context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
+                    .getBoolean("debugLoggingEnabled", false)
+                result.success(enabled)
+            }
             "setCloakEnabled" -> {
                 val enabled = call.argument<Boolean>("enabled") ?: false
                 context.getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
