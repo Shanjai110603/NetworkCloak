@@ -46,25 +46,40 @@ object AppStateTracker {
     }
 
     /**
-     * Registers ActivityManager.OnUidImportanceListener on Android 8.0+ (API 26+)
-     * to monitor real-time app process importance transitions.
+     * Registers ActivityManager.OnUidImportanceListener dynamically via reflection
+     * on Android 8.0+ (API 26+) to monitor real-time app process importance transitions.
      */
     fun startMonitoring(context: Context, onImportanceChanged: (() -> Unit)? = null) {
         if (listenerRegistered) return
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             try {
                 val am = context.applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
-                am?.addOnUidImportanceListener({ uid, importance ->
-                    val isBg = importance > android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE
-                    val changed = synchronized(backgroundUids) {
-                        if (isBg) backgroundUids.add(uid) else backgroundUids.remove(uid)
+                val listenerClass = Class.forName("android.app.ActivityManager\$OnUidImportanceListener")
+                val proxy = java.lang.reflect.Proxy.newProxyInstance(
+                    listenerClass.classLoader,
+                    arrayOf(listenerClass)
+                ) { _, method, args ->
+                    if (method.name == "onUidImportance" && args != null && args.size >= 2) {
+                        val uid = args[0] as? Int ?: return@newProxyInstance null
+                        val importance = args[1] as? Int ?: return@newProxyInstance null
+                        val isBg = importance > android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE
+                        val changed = synchronized(backgroundUids) {
+                            if (isBg) backgroundUids.add(uid) else backgroundUids.remove(uid)
+                        }
+                        if (changed) {
+                            onImportanceChanged?.invoke()
+                        }
                     }
-                    if (changed) {
-                        onImportanceChanged?.invoke()
-                    }
-                }, android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)
+                    null
+                }
+                val addMethod = am?.javaClass?.getMethod(
+                    "addOnUidImportanceListener",
+                    listenerClass,
+                    Int::class.javaPrimitiveType
+                )
+                addMethod?.invoke(am, proxy, android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)
                 listenerRegistered = true
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 android.util.Log.w("NC-AppState", "OnUidImportanceListener setup skipped: ${e.message}")
             }
         }
