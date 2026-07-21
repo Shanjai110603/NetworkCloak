@@ -138,21 +138,60 @@ class NetworkCloakVpnService : VpnService() {
                 .setMtu(1500)
                 .setBlocking(false)
 
-            // Route ALL apps through the tunnel for per-packet policy evaluation.
-            // Bug #3 fix: the previous code called addAllowedApplication(blockedAppId),
-            // which has the OPPOSITE semantics — it only routes ALLOWED apps through the
-            // tunnel, meaning blocked apps bypassed the tunnel entirely.
-            // Correct approach: route everything, exclude only ourselves to avoid a loop.
-            // Per-packet allow/block is then handled in processPacket() via RuleRepository.
-            try {
-                builder.addDisallowedApplication("com.networkcloak.network_cloak")
-            } catch (_: Exception) { }
+            // ── Per-app TCP blocking strategy ────────────────────────────────
+            //
+            // Without a TCP proxy (tun2socks .aar), we cannot forward TCP
+            // through the TUN interface — writing an allowed TCP packet back to
+            // the TUN fd causes it to re-enter the tunnel in a loop.
+            //
+            // The correct approach is to route ONLY BLOCKED apps through the TUN:
+            //   • Blocked apps enter TUN → their TCP gets RST'd, UDP dropped.
+            //   • Allowed apps bypass the TUN entirely → OS handles their TCP
+            //     normally, so the game/browser/etc. works correctly.
+            //
+            // We use addAllowedApplication() to whitelist ONLY the blocked apps
+            // into the tunnel (VPN builder semantics: addAllowedApplication means
+            // ONLY those apps go through the VPN; everything else bypasses it).
+            //
+            // Special cases:
+            //   1. Network Cloak itself is always excluded (loop prevention).
+            //   2. In Lockdown mode, we flip back to route-all + addDisallowed
+            //      because every app should be blocked except the allowlist.
+            //   3. DNS interception (port 53) still works because addAllowedApplication
+            //      routes those apps through the TUN, where DnsGuardEngine intercepts.
 
-            // Lockdown mode: also exclude phone/dialer so emergency calls work
             if (RuleRepository.isLockdownActive) {
-                val phonePkgs = listOf("com.android.phone", "com.google.android.dialer")
-                for (pkg in phonePkgs) {
+                // Lockdown: route ALL apps into tunnel; exclude only emergency/VPN itself
+                val excluded = buildList {
+                    add("com.networkcloak.network_cloak")
+                    addAll(listOf("com.android.phone", "com.google.android.dialer"))
+                    addAll(RuleRepository.getLockdownAllowlist())
+                }
+                for (pkg in excluded) {
                     try { builder.addDisallowedApplication(pkg) } catch (_: Exception) { }
+                }
+                Log.i(TAG, "VPN configured in LOCKDOWN mode. Excluded: ${excluded.size} packages")
+            } else {
+                // Normal mode: route ONLY blocked apps through the TUN.
+                // Allowed/unset apps bypass the TUN and use the real OS stack.
+                val blockedApps = RuleRepository.getBlockedAppIds(this)
+                if (blockedApps.isEmpty()) {
+                    // No apps currently blocked — route nothing through TUN
+                    // (DNS interception still works if DnsGuardEngine handles it)
+                    // We add ourselves only to keep a valid interface established.
+                    try { builder.addAllowedApplication("com.networkcloak.network_cloak") } catch (_: Exception) { }
+                    Log.i(TAG, "VPN configured: 0 blocked apps — TUN has minimal routing")
+                } else {
+                    // Route only blocked apps + ourselves through TUN.
+                    // Our own app is added so DnsGuardEngine's platform channel
+                    // traffic is also routed correctly.
+                    try { builder.addAllowedApplication("com.networkcloak.network_cloak") } catch (_: Exception) { }
+                    for (pkg in blockedApps) {
+                        try { builder.addAllowedApplication(pkg) } catch (e: Exception) {
+                            Log.w(TAG, "Could not add $pkg to TUN: ${e.message}")
+                        }
+                    }
+                    Log.i(TAG, "VPN configured: ${blockedApps.size} blocked apps routed through TUN")
                 }
             }
 
@@ -160,7 +199,7 @@ class NetworkCloakVpnService : VpnService() {
             tunInterface = builder.establish()
             try { oldInterface?.close() } catch (_: Exception) { }
 
-            Log.i(TAG, "VPN configured. Lockdown=${RuleRepository.isLockdownActive}")
+            Log.i(TAG, "VPN interface established. Lockdown=${RuleRepository.isLockdownActive}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to configure VPN: ${e.message}")
         }
@@ -387,12 +426,12 @@ class NetworkCloakVpnService : VpnService() {
 
         // ── Enforcement ───────────────────────────────────────────
 
-        // TCP: Option B active — ALL TCP is rejected with RST regardless of
-        // allow/block decision. There is no TCP forwarding capability without
-        // tun2socks .aar integration (future sprint). Without this guard, an
-        // "allowed" TCP packet would be written back to the TUN fd, re-enter
-        // the tunnel, and loop indefinitely — the root cause of the WhatsApp/
-        // Chrome/YouTube hang bug.
+        // TCP: Only apps that are BLOCKED reach the TUN (configureVpn uses
+        // addAllowedApplication to route only blocked apps here). So all TCP
+        // reaching this code path belongs to a blocked app and must be RST'd.
+        //
+        // Allowed apps bypass the TUN entirely via OS routing, so their TCP
+        // connections work normally — fixing the game/app-won't-open bug.
         if (protocol == OsConstants.IPPROTO_TCP) {
             if (packet.size >= ihl + 20) {
                 try {
@@ -402,7 +441,7 @@ class NetworkCloakVpnService : VpnService() {
                     Log.w(TAG, "RST build failed: ${e.message}")
                 }
             }
-            // Log as blocked for Watchtower — TCP cannot be forwarded
+            // Log as blocked for Watchtower
             NativeEventBus.postConnectionEvent(
                 uid       = uid,
                 appId     = appId,

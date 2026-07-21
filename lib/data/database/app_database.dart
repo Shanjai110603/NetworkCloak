@@ -10,6 +10,9 @@ part 'app_database.g.dart';
 // TABLE DEFINITIONS  (all 15 from SDES spec)
 // ─────────────────────────────────────────────────────────────
 
+/// Persistent key-value settings table.
+/// Stores configuration categories (e.g., VPN settings, UI selections)
+/// mapping keys to values and dynamic value types.
 class Settings extends Table {
   TextColumn get category => text()();
   TextColumn get key => text()();
@@ -21,6 +24,9 @@ class Settings extends Table {
   Set<Column> get primaryKey => {category, key};
 }
 
+/// Network profiles table.
+/// Represents a profile mode (e.g., Home, Work, Travel, Public Wi-Fi)
+/// that holds specific rule presets or active statuses.
 class Profiles extends Table {
   TextColumn get id => text()();
   TextColumn get name => text()();
@@ -156,6 +162,8 @@ class ConnectionHistory extends Table {
   TextColumn get action => text()();
   IntColumn get bytes => integer().nullable()();
   TextColumn get countryCode => text().nullable()();
+  RealColumn get latitude => real().nullable()();
+  RealColumn get longitude => real().nullable()();
   IntColumn get timestamp => integer()();
 }
 
@@ -219,48 +227,65 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
           // Create secondary indexes manually (Drift 2.11 compatible)
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_fr_app ON firewall_rules(app_id)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_fr_profile ON firewall_rules(profile_id)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_tr_end ON temporary_rules(end_at)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_dl_ts ON dns_logs(timestamp)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_dl_app ON dns_logs(app_id)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_as_app_date ON application_stats(app_id, stat_date)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_ch_app ON connection_history(app_id)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_ch_ts ON connection_history(timestamp)',
-          );
-          await customStatement(
-            'CREATE INDEX IF NOT EXISTS idx_ch_dest ON connection_history(dest_host)',
-          );
+          await _createIndexes();
           // Record schema version
           await into(schemaVersions).insert(SchemaVersionsCompanion(
-            version: const Value(1),
+            version: const Value(2),
             appliedAt: Value(DateTime.now().millisecondsSinceEpoch),
-            description: const Value('Initial database setup — Network Cloak v1.0'),
+            description: const Value('Database setup v2 — Added coordinates support'),
           ));
         },
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            // Version 1 to 2 migration: add latitude/longitude columns to connection_history table
+            await customStatement('ALTER TABLE connection_history ADD COLUMN latitude REAL');
+            await customStatement('ALTER TABLE connection_history ADD COLUMN longitude REAL');
+            // Insert migration record
+            await into(schemaVersions).insert(SchemaVersionsCompanion(
+              version: const Value(2),
+              appliedAt: Value(DateTime.now().millisecondsSinceEpoch),
+              description: const Value('Migration from v1 to v2: added coordinate caching to connection_history'),
+            ));
+          }
+        },
       );
+
+  Future<void> _createIndexes() async {
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_fr_app ON firewall_rules(app_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_fr_profile ON firewall_rules(profile_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_tr_end ON temporary_rules(end_at)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_dl_ts ON dns_logs(timestamp)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_dl_app ON dns_logs(app_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_as_app_date ON application_stats(app_id, stat_date)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_ch_app ON connection_history(app_id)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_ch_ts ON connection_history(timestamp)',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_ch_dest ON connection_history(dest_host)',
+    );
+  }
 
   // ── Convenience query helpers ──────────────────────────────
 

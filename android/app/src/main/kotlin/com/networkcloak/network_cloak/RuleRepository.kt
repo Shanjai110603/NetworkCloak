@@ -282,6 +282,9 @@ object RuleRepository {
         return lockdownAllowlist.contains(appId)
     }
 
+    /** Returns a snapshot of the lockdown allowlist. Used by VPN builder to exclude allowed apps. */
+    fun getLockdownAllowlist(): List<String> = lockdownAllowlist.toList()
+
     // ── Session rules API ─────────────────────────────────────────
 
     /** Clears P3 session rules. Called from NetworkCloakVpnService.stopVpn(). */

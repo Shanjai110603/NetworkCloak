@@ -9,7 +9,6 @@ class SettingsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final dnsProfile = ref.watch(dnsProfileProvider);
     final autoSwitch = ref.watch(autoSwitchEnabledProvider);
     final notificationsEnabled = ref.watch(notificationsEnabledProvider);
     final retentionDays = ref.watch(retentionDaysProvider);
@@ -25,12 +24,6 @@ class SettingsScreen extends ConsumerWidget {
           _SettingsGroup(
             title: 'Protection',
             items: [
-              _SettingsTile(
-                icon: Icons.dns_outlined,
-                label: 'DNS Guard',
-                subtitle: '${dnsProfile.name} • ${dnsProfile.enabledCategories.length} categories',
-                onTap: () => context.push('/dns'),
-              ),
               _SettingsTile(
                 icon: Icons.shield_outlined,
                 label: 'Shield',

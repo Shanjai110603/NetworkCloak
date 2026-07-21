@@ -294,144 +294,231 @@ class _AppRuleTile extends StatelessWidget {
     final subtitle = parts.length > 2 ? parts.skip(1).join('.') : appId;
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
         color: NcColors.surface,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: NcColors.border),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // App icon — real PNG from PackageManager, or placeholder
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: NcColors.surfaceElevated,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: iconBytes != null && iconBytes!.isNotEmpty
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Image.memory(
-                      Uint8List.fromList(iconBytes!),
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
-                      errorBuilder: (_, __, ___) => Icon(
-                        Icons.apps_outlined,
-                        color: NcColors.textMuted,
-                        size: 22,
-                      ),
-                    ),
-                  )
-                : Icon(Icons.apps_outlined,
-                    color: NcColors.textMuted, size: 22),
-          ),
-          const SizedBox(width: 12),
-          // Name + package subtitle + chips + profile dropdown
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        label,
-                        style: Theme.of(context).textTheme.titleMedium,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (riskLevel != null) ...[
-                      const SizedBox(width: 6),
-                      _RiskBadge(
-                        level: riskLevel!,
-                        score: riskScore ?? 0,
-                        reasons: riskReasons ?? [],
-                        appName: label,
-                      ),
-                    ],
-                  ],
-                ),
-                if (label != appId)
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                        color: NcColors.textMuted, fontSize: 10),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    // Profile/Mode dropdown
-                    DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: profileId,
-                        isDense: true,
-                        dropdownColor: NcColors.surface,
-                        style: const TextStyle(
-                          color: NcColors.primary,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        icon: const Icon(Icons.arrow_drop_down, color: NcColors.primary, size: 16),
-                        onChanged: onProfileChanged,
-                        items: const [
-                          DropdownMenuItem(value: 'default', child: Text('All Modes')),
-                          DropdownMenuItem(value: 'home', child: Text('Home')),
-                          DropdownMenuItem(value: 'work', child: Text('Work')),
-                          DropdownMenuItem(value: 'publicWifi', child: Text('Public Wi-Fi')),
-                          DropdownMenuItem(value: 'travel', child: Text('Travel')),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // Status chips — one per enforcement context
-                    Expanded(
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: [
-                            _StatusChip(label: 'Wi-Fi', action: action),
-                            const SizedBox(width: 4),
-                            _StatusChip(label: 'Cell', action: action),
-                            const SizedBox(width: 4),
-                            _StatusChip(label: 'LAN', action: action),
-                            const SizedBox(width: 4),
-                            _StatusChip(label: 'BG', action: action),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          // Quick-action buttons
+          // Top section: Icon, Name/Package, Action state badge
           Row(
-            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              _QuickBtn(
-                  icon: Icons.check,
-                  color: NcColors.chipAllow,
-                  tooltip: 'Allow',
-                  onTap: onAllow),
-              const SizedBox(width: 4),
-              _QuickBtn(
-                  icon: Icons.block,
-                  color: NcColors.chipBlock,
-                  tooltip: 'Block',
-                  onTap: onBlock),
-              const SizedBox(width: 4),
-              _QuickBtn(
-                  icon: Icons.help_outline,
-                  color: NcColors.chipAsk,
-                  tooltip: 'Ask',
-                  onTap: onAsk),
+              // App Icon
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: NcColors.surfaceElevated,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: iconBytes != null && iconBytes!.isNotEmpty
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.memory(
+                          Uint8List.fromList(iconBytes!),
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                          errorBuilder: (_, __, ___) => Icon(
+                            Icons.apps_outlined,
+                            color: NcColors.textMuted,
+                            size: 24,
+                          ),
+                        ),
+                      )
+                    : Icon(Icons.apps_outlined,
+                        color: NcColors.textMuted, size: 24),
+              ),
+              const SizedBox(width: 14),
+              // App Info (Name, Package Name)
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            label,
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (riskLevel != null) ...[
+                          const SizedBox(width: 8),
+                          _RiskBadge(
+                            level: riskLevel!,
+                            score: riskScore ?? 0,
+                            reasons: riskReasons ?? [],
+                            appName: label,
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: NcColors.textMuted,
+                        fontSize: 11,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Current Action Status Indicator Badge
+              _ActionBadge(action: action),
+            ],
+          ),
+          
+          const SizedBox(height: 12),
+          Divider(height: 1, color: NcColors.border),
+          const SizedBox(height: 12),
+          
+          // Bottom section: Network statuses, Profile dropdown, and Action controls
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Statuses & Mode
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Mode dropdown selector
+                    Row(
+                      children: [
+                        Icon(Icons.layers_outlined, size: 14, color: NcColors.textMuted),
+                        const SizedBox(width: 4),
+                        DropdownButtonHideUnderline(
+                          child: DropdownButton<String>(
+                            value: profileId,
+                            isDense: true,
+                            dropdownColor: NcColors.surface,
+                            style: const TextStyle(
+                              color: NcColors.primary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            icon: const Icon(Icons.arrow_drop_down, color: NcColors.primary, size: 16),
+                            onChanged: onProfileChanged,
+                            items: const [
+                              DropdownMenuItem(value: 'default', child: Text('All Modes')),
+                              DropdownMenuItem(value: 'home', child: Text('Home')),
+                              DropdownMenuItem(value: 'work', child: Text('Work')),
+                              DropdownMenuItem(value: 'publicWifi', child: Text('Public Wi-Fi')),
+                              DropdownMenuItem(value: 'travel', child: Text('Travel')),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    // Network Status indicator chips
+                    Row(
+                      children: [
+                        _StatusChip(label: 'Wi-Fi', action: action),
+                        const SizedBox(width: 4),
+                        _StatusChip(label: 'Cell', action: action),
+                        const SizedBox(width: 4),
+                        _StatusChip(label: 'LAN', action: action),
+                        const SizedBox(width: 4),
+                        _StatusChip(label: 'BG', action: action),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              
+              const SizedBox(width: 16),
+              
+              // Action buttons (Allow, Block, Ask)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _QuickBtn(
+                    icon: Icons.check,
+                    color: NcColors.chipAllow,
+                    tooltip: 'Allow',
+                    onTap: onAllow,
+                    isSelected: action == RuleAction.allow,
+                  ),
+                  const SizedBox(width: 6),
+                  _QuickBtn(
+                    icon: Icons.block,
+                    color: NcColors.chipBlock,
+                    tooltip: 'Block',
+                    onTap: onBlock,
+                    isSelected: action == RuleAction.block || action == RuleAction.temporaryBlock,
+                  ),
+                  const SizedBox(width: 6),
+                  _QuickBtn(
+                    icon: Icons.help_outline,
+                    color: NcColors.chipAsk,
+                    tooltip: 'Ask',
+                    onTap: onAsk,
+                    isSelected: action == RuleAction.ask,
+                  ),
+                ],
+              ),
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ActionBadge extends StatelessWidget {
+  const _ActionBadge({required this.action});
+  final RuleAction action;
+
+  @override
+  Widget build(BuildContext context) {
+    final String label;
+    final Color color;
+    
+    switch (action) {
+      case RuleAction.allow:
+        label = 'Allowed';
+        color = NcColors.chipAllow;
+        break;
+      case RuleAction.block:
+      case RuleAction.temporaryBlock:
+        label = 'Blocked';
+        color = NcColors.chipBlock;
+        break;
+      case RuleAction.ask:
+        label = 'Ask';
+        color = NcColors.chipAsk;
+        break;
+      default:
+        label = 'Allowed';
+        color = NcColors.chipAllow;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.25), width: 1),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -540,11 +627,13 @@ class _QuickBtn extends StatelessWidget {
     required this.color,
     required this.tooltip,
     required this.onTap,
+    required this.isSelected,
   });
   final IconData icon;
   final Color color;
   final String tooltip;
   final VoidCallback onTap;
+  final bool isSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -553,13 +642,21 @@ class _QuickBtn extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: Container(
-          width: 32,
-          height: 32,
+          width: 36,
+          height: 36,
           decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(8),
+            color: isSelected ? color : color.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isSelected ? color : color.withValues(alpha: 0.3),
+              width: 1,
+            ),
           ),
-          child: Icon(icon, color: color, size: 16),
+          child: Icon(
+            icon,
+            color: isSelected ? Colors.white : color,
+            size: 18,
+          ),
         ),
       ),
     );

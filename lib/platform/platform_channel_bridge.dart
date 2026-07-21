@@ -9,18 +9,34 @@ const _kEventChannel = 'com.networkcloak/events';
 // ─────────────────────────────────────────────────────────────
 // PAL: Firewall Platform Interface
 // ─────────────────────────────────────────────────────────────
+
+/// Low-level abstraction layer that manages interaction with the Android Firewall service.
+/// Directs native routing rules, lockdown enforcement, and fetches state.
 abstract class FirewallPlatform {
+  /// Instructs the native VPN service to spawn and initiate the packet interceptor.
   Future<void> startFirewall();
+
+  /// Stops the packet interceptor, restoring standard system routing.
   Future<void> stopFirewall(String reason);
+
+  /// Synchronizes firewall rules from the Drift DB to the active VPN runtime engine.
   Future<void> updateRules(List<Map<String, dynamic>> serializedRules, {bool blockLan = false});
+
+  /// Restricts all applications except for specified packages from WAN access.
   Future<void> activateLockdown(List<String> allowlist);
+
+  /// Restores normal operation out of lockdown mode.
   Future<void> deactivateLockdown(String reason);
+
+  /// Fetches real-time status details of the firewall interceptor.
   Future<Map<String, dynamic>> getStatus();
 }
 
 // ─────────────────────────────────────────────────────────────
 // PAL: VPN Platform Interface
 // ─────────────────────────────────────────────────────────────
+
+/// Low-level abstraction for controlling the active Android VpnService interface lifecycle.
 abstract class VpnPlatform {
   Future<void> startVpn();
   Future<void> stopVpn();

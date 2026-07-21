@@ -36,27 +36,23 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_riverpod: 2.3.6
   go_router: 7.1.1
-  drift: 2.11.0
-  sqlite3_flutter_libs: 0.5.15
-  path_provider: 2.0.15
-  path: 1.9.1
-  maxminddb: 1.4.1
-  shared_preferences: 2.1.1
-  http: 1.0.0
-  csv: 5.0.2
-  crypto: 3.0.3
-  intl: 0.18.1
+  drift: ^2.11.0
+  sqlite3_flutter_libs: ^0.5.15
+  path_provider: ^2.0.15
+  path: ^1.9.1
+  maxminddb: ^1.4.1
+  shared_preferences: ^2.1.1
+  http: ^1.0.0
+  csv: ^5.0.2
+  crypto: ^3.0.3
+  intl: ^0.18.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  drift_dev: 2.11.0
-  build_runner: 2.4.9
+  drift_dev: ^2.11.0
+  build_runner: ^2.4.0
   flutter_lints: 2.0.1
-
-dependency_overrides:
-  sqlparser: 0.30.0
-
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
