@@ -133,32 +133,29 @@ class NetworkCloakVpnService : VpnService() {
             val builder = Builder()
                 .setSession("Network Cloak")
                 .addAddress("10.0.0.1", 32)
+                .addAddress("fd00::1", 128)
                 .addRoute("0.0.0.0", 0)          // capture all IPv4 traffic
+                .addRoute("::", 0)               // capture all IPv6 traffic
                 .addDnsServer("10.0.0.1")
+                .addDnsServer("fd00::1")
                 .setMtu(1500)
                 .setBlocking(false)
 
-            // ── Per-app TCP blocking strategy ────────────────────────────────
+            // ── Per-app TCP & UDP blocking strategy ──────────────────────────
             //
             // Without a TCP proxy (tun2socks .aar), we cannot forward TCP
             // through the TUN interface — writing an allowed TCP packet back to
             // the TUN fd causes it to re-enter the tunnel in a loop.
             //
             // The correct approach is to route ONLY BLOCKED apps through the TUN:
-            //   • Blocked apps enter TUN → their TCP gets RST'd, UDP dropped.
-            //   • Allowed apps bypass the TUN entirely → OS handles their TCP
-            //     normally, so the game/browser/etc. works correctly.
+            //   • Blocked apps enter TUN → their TCP gets RST'd, UDP/ICMP dropped,
+            //     IPv6 dropped, and DNS queries returned as NXDOMAIN.
+            //   • Allowed apps bypass the TUN entirely → OS handles their TCP/UDP
+            //     natively over IPv4 & IPv6, ensuring zero lag and normal app launch.
             //
             // We use addAllowedApplication() to whitelist ONLY the blocked apps
             // into the tunnel (VPN builder semantics: addAllowedApplication means
             // ONLY those apps go through the VPN; everything else bypasses it).
-            //
-            // Special cases:
-            //   1. Network Cloak itself is always excluded (loop prevention).
-            //   2. In Lockdown mode, we flip back to route-all + addDisallowed
-            //      because every app should be blocked except the allowlist.
-            //   3. DNS interception (port 53) still works because addAllowedApplication
-            //      routes those apps through the TUN, where DnsGuardEngine intercepts.
 
             if (RuleRepository.isLockdownActive) {
                 // Lockdown: route ALL apps into tunnel; exclude only emergency/VPN itself
@@ -176,15 +173,11 @@ class NetworkCloakVpnService : VpnService() {
                 // Allowed/unset apps bypass the TUN and use the real OS stack.
                 val blockedApps = RuleRepository.getBlockedAppIds(this)
                 if (blockedApps.isEmpty()) {
-                    // No apps currently blocked — route nothing through TUN
-                    // (DNS interception still works if DnsGuardEngine handles it)
-                    // We add ourselves only to keep a valid interface established.
+                    // No apps currently blocked — route minimal control traffic through TUN
                     try { builder.addAllowedApplication("com.networkcloak.network_cloak") } catch (_: Exception) { }
                     Log.i(TAG, "VPN configured: 0 blocked apps — TUN has minimal routing")
                 } else {
-                    // Route only blocked apps + ourselves through TUN.
-                    // Our own app is added so DnsGuardEngine's platform channel
-                    // traffic is also routed correctly.
+                    // Route blocked apps + ourselves through TUN.
                     try { builder.addAllowedApplication("com.networkcloak.network_cloak") } catch (_: Exception) { }
                     for (pkg in blockedApps) {
                         try { builder.addAllowedApplication(pkg) } catch (e: Exception) {
@@ -209,15 +202,12 @@ class NetworkCloakVpnService : VpnService() {
         if (running.get()) {
             if (currentMode == mode) return  // already in the requested mode, nothing to do
             if (currentMode == VpnMode.QUICK_BLOCK && mode == VpnMode.FULL) {
-                // Upgrade in place — don't tear down the TUN interface/thread,
-                // just attach the pieces Quick Block skipped.
                 DnsGuardEngine.attach(this)
                 currentMode = VpnMode.FULL
                 persistProtectionState(VpnMode.FULL)
                 NativeEventBus.postProtectionStateChanged(VpnMode.FULL.toEventString())
                 return
             }
-            // FULL -> QUICK_BLOCK downgrade: detach DnsGuardEngine, keep tunnel running
             if (currentMode == VpnMode.FULL && mode == VpnMode.QUICK_BLOCK) {
                 DnsGuardEngine.detach()
                 currentMode = VpnMode.QUICK_BLOCK
@@ -230,7 +220,6 @@ class NetworkCloakVpnService : VpnService() {
         running.set(true)
 
         createNotificationChannel()
-        // Create the nc_alerts channel for system notifications (D5)
         NativeEventBus.createAlertsChannel(this)
         startForeground(NOTIFICATION_ID, buildNotification())
 
@@ -253,7 +242,6 @@ class NetworkCloakVpnService : VpnService() {
         currentMode = mode
         persistProtectionState(mode)
 
-        // Attach DnsGuardEngine only in FULL mode — Quick Block skips DNS interception
         if (mode == VpnMode.FULL) {
             DnsGuardEngine.attach(this)
         }
@@ -306,14 +294,13 @@ class NetworkCloakVpnService : VpnService() {
         workerThread?.interrupt()
         unregisterScreenReceiver()
 
-        // Cancel coroutine scope and close TUN writer channel
         scope.coroutineContext.cancelChildren()
         tunWriteChannel.close()
 
         if (currentMode == VpnMode.FULL) {
             DnsGuardEngine.detach()
         }
-        RuleRepository.clearSessionRules()  // P3 session rules end with the VPN session
+        RuleRepository.clearSessionRules()
 
         try { tunInterface?.close() } catch (_: Exception) { }
         tunInterface = null
@@ -325,18 +312,12 @@ class NetworkCloakVpnService : VpnService() {
         stopSelf()
     }
 
-    /**
-     * Stops VPN only if running in QUICK_BLOCK mode and the quick-block list
-     * is now empty. Called from PlatformChannelHandler when the last app is
-     * un-blocked in Quick Block mode.
-     */
     fun stopQuickBlockIfEmpty() {
         if (currentMode == VpnMode.QUICK_BLOCK && RuleRepository.isQuickBlockEmpty()) {
             stopVpn("Quick Block list empty")
         }
     }
 
-    /** Persists protection state for BootReceiver to read on next device start. */
     private fun persistProtectionState(mode: VpnMode) {
         getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
@@ -346,23 +327,12 @@ class NetworkCloakVpnService : VpnService() {
 
     // ── Packet Processing Loop ────────────────────────────────────
 
-    /**
-     * Reads raw IP packets from the TUN fd and dispatches each packet:
-     *   - UDP port 53 → DnsGuardEngine (DoH interception) — FULL mode only
-     *   - TCP         → RST (Option B — no tun2socks integration)
-     *   - UDP/ICMP    → processPacket() for policy evaluation and forwarding
-     *
-     * UDP/DNS forwarding runs on a bounded 4-thread coroutine pool (D1).
-     * All writes back to the TUN fd go through a single-writer channel
-     * to prevent interleaved/corrupted writes from concurrent threads.
-     */
     private fun packetLoop() {
         val tun    = tunInterface ?: return
         val input  = FileInputStream(tun.fileDescriptor)
         val output = FileOutputStream(tun.fileDescriptor)
         val buffer = ByteBuffer.allocate(32767)
 
-        // Start the single TUN writer coroutine (D1)
         scope.launch {
             for (packet in tunWriteChannel) {
                 try {
@@ -399,19 +369,17 @@ class NetworkCloakVpnService : VpnService() {
         if (packet.size < 20) return
 
         val version = (packet[0].toInt() and 0xF0) shr 4
-        if (version != 4) {
-            // Pass IPv6 through — IPv6 rules deferred to Phase 4
-            tunWriteChannel.trySend(packet)
-            return
+        if (version != 4 && version != 6) return
+
+        val isIpv6 = (version == 6)
+        val ihl = if (isIpv6) 40 else (packet[0].toInt() and 0x0F) * 4
+        if (packet.size < ihl + 4) return
+
+        val protocol = if (isIpv6) {
+            packet[6].toInt() and 0xFF
+        } else {
+            packet[9].toInt() and 0xFF
         }
-
-        // ── IPv4 header parsing ───────────────────────────────────
-        val protocol = packet[9].toInt() and 0xFF
-        val srcIp    = formatIp(packet, 12)
-        val dstIp    = formatIp(packet, 16)
-
-        val ihl = (packet[0].toInt() and 0x0F) * 4
-        if (packet.size < ihl + 4) { tunWriteChannel.trySend(packet); return }
 
         val srcPort = when (protocol) {
             OsConstants.IPPROTO_TCP, OsConstants.IPPROTO_UDP ->
@@ -424,103 +392,85 @@ class NetworkCloakVpnService : VpnService() {
             else -> 0
         }
 
+        val srcIp = if (isIpv6) "IPv6-src" else formatIp(packet, 12)
+        val dstIp = if (isIpv6) "IPv6-dst" else formatIp(packet, 16)
+
         val protocolStr = when (protocol) {
             OsConstants.IPPROTO_TCP  -> "TCP"
             OsConstants.IPPROTO_UDP  -> "UDP"
-            OsConstants.IPPROTO_ICMP -> "ICMP"
+            OsConstants.IPPROTO_ICMP, 58 -> "ICMP"
             else                     -> "IP/$protocol"
         }
 
-        // ── DNS interception (port 53) ────────────────────────────
-        // Only intercept DNS in FULL mode; Quick Block mode forwards normally
-        if (protocol == OsConstants.IPPROTO_UDP && dstPort == 53 && currentMode == VpnMode.FULL) {
-            scope.launch {
-                DnsGuardEngine.interceptPacket(packet) { responsePacket ->
-                    tunWriteChannel.trySend(responsePacket)
-                }
-            }
-            return
+        val isLockdown = RuleRepository.isLockdownActive
+
+        // UID lookup
+        val uid = if (isIpv6) -1 else getConnectionOwnerUid(srcIp, srcPort, dstIp, dstPort, protocol)
+        val appId = UidMapper.getAppId(this, uid)
+
+        // Decision logic:
+        // In Lockdown mode: Check allowlist.
+        // In Normal mode: All packets in TUN belong to blocked apps (since configureVpn only added blocked apps).
+        // Exceptions: VPN app itself ("com.networkcloak.network_cloak").
+        val decision = if (isLockdown) {
+            if (RuleRepository.isAppAllowedInLockdown(appId)) "allow" else "block"
+        } else {
+            if (appId == "com.networkcloak.network_cloak") "allow" else "block"
         }
-
-        // ── UID lookup → App ID ───────────────────────────────────
-        val uid         = getConnectionOwnerUid(srcIp, srcPort, dstIp, dstPort, protocol)
-        val appId       = UidMapper.getAppId(this, uid)
-        val isBackground = AppStateTracker.isBackground(uid)
-
-        // Build runtime context for condition-aware global rule evaluation
-        val context = RuleRepository.lastKnownContext
-
-        // ── Rule evaluation ───────────────────────────────────────
-        val decision = RuleRepository.evaluate(
-            appId        = appId,
-            destIp       = dstIp,
-            destPort     = dstPort,
-            protocol     = protocolStr,
-            isBackground = isBackground,
-            context      = context,
-        )
 
         val debugLogEnabled = getSharedPreferences("nc_settings", Context.MODE_PRIVATE)
             .getBoolean("debugLoggingEnabled", false)
         if (debugLogEnabled) {
-            Log.d(TAG, "Packet: proto=$protocolStr, app=$appId, src=$srcIp:$srcPort, dest=$dstIp:$dstPort, decision=$decision, bg=$isBackground")
+            Log.d(TAG, "Packet: v=$version, proto=$protocolStr, app=$appId, src=$srcIp:$srcPort, dest=$dstIp:$dstPort, decision=$decision")
         }
 
-        // ── Enforcement ───────────────────────────────────────────
-
-        // TCP: Only apps that are BLOCKED reach the TUN (configureVpn uses
-        // addAllowedApplication to route only blocked apps here). So all TCP
-        // reaching this code path belongs to a blocked app and must be RST'd.
-        //
-        // Allowed apps bypass the TUN entirely via OS routing, so their TCP
-        // connections work normally — fixing the game/app-won't-open bug.
-        if (protocol == OsConstants.IPPROTO_TCP) {
-            if (packet.size >= ihl + 20) {
-                try {
-                    val rst = PacketUtils.buildTcpRst(packet, ihl)
-                    tunWriteChannel.trySend(rst)
-                } catch (e: Exception) {
-                    Log.w(TAG, "RST build failed: ${e.message}")
-                }
-            }
-            // Log as blocked for Watchtower
-            NativeEventBus.postConnectionEvent(
-                uid       = uid,
-                appId     = appId,
-                destHost  = dstIp,
-                destIp    = dstIp,
-                port      = dstPort,
-                protocol  = protocolStr,
-                bytes     = packet.size,
-                allowed   = false,
-            )
-            return
-        }
-
-        if (decision == "allow") {
-            when (protocol) {
-                OsConstants.IPPROTO_UDP -> {
-                    // Forward UDP on the coroutine pool (D1) — not the packet loop thread
-                    scope.launch {
-                        forwardUdpPacket(packet, ihl, dstIp, dstPort)
+        // ── DNS Interception (port 53 UDP) ───────────────────────────
+        if (protocol == OsConstants.IPPROTO_UDP && dstPort == 53) {
+            if (decision == "allow" && currentMode == VpnMode.FULL) {
+                scope.launch {
+                    DnsGuardEngine.interceptPacket(packet) { responsePacket ->
+                        tunWriteChannel.trySend(responsePacket)
                     }
                 }
-                // Defensive: TCP is already handled above and will never reach here.
-                // This explicit branch documents that and prevents any future
-                // refactoring from accidentally reintroducing the self-loop bug.
-                OsConstants.IPPROTO_TCP -> {
-                    // Unreachable: all TCP exits via the RST block above.
-                    // If this somehow executes, do NOT write the packet back to
-                    // the TUN fd — that would cause the self-loop hang.
-                    Log.e(TAG, "BUG: TCP reached allow-branch — should be unreachable")
+                return
+            } else {
+                // Blocked app DNS query -> Return NXDOMAIN immediately for IPv4
+                if (!isIpv6 && currentMode == VpnMode.FULL && packet.size > ihl + 8) {
+                    val dnsPayload = packet.copyOfRange(ihl + 8, packet.size)
+                    val nxPacket = DnsGuardEngine.buildNxdomainPacket(packet, ihl, dnsPayload)
+                    tunWriteChannel.trySend(nxPacket)
                 }
-                else -> tunWriteChannel.trySend(packet)  // ICMP etc.
+                return
             }
-        } else {
-            // Blocked UDP/ICMP: drop silently
         }
 
-        // ── Watchtower event ──────────────────────────────────────
+        // ── Enforcement ──────────────────────────────────────────────
+        if (decision == "allow") {
+            if (protocol == OsConstants.IPPROTO_UDP && !isIpv6) {
+                scope.launch {
+                    forwardUdpPacket(packet, ihl, dstIp, dstPort)
+                }
+            } else if (!isIpv6 && protocol != OsConstants.IPPROTO_TCP) {
+                tunWriteChannel.trySend(packet)
+            }
+        } else {
+            // BLOCKED:
+            // - IPv4 TCP gets TCP RST
+            // - IPv6 TCP & all UDP (QUIC, HTTP3, Game UDP, Ads UDP) are DROPPED!
+            if (protocol == OsConstants.IPPROTO_TCP && !isIpv6) {
+                if (packet.size >= ihl + 20) {
+                    try {
+                        val rst = PacketUtils.buildTcpRst(packet, ihl)
+                        tunWriteChannel.trySend(rst)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "RST build failed: ${e.message}")
+                    }
+                }
+            }
+            // All UDP / ICMP / IPv6 packets for blocked apps are dropped silently here
+        }
+
+        // Post connection event to Watchtower
         NativeEventBus.postConnectionEvent(
             uid       = uid,
             appId     = appId,
@@ -529,7 +479,7 @@ class NetworkCloakVpnService : VpnService() {
             port      = dstPort,
             protocol  = protocolStr,
             bytes     = packet.size,
-            allowed   = decision == "allow",
+            allowed   = (decision == "allow"),
         )
     }
 

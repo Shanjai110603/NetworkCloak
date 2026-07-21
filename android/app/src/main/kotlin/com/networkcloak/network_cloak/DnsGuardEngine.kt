@@ -435,7 +435,7 @@ object DnsGuardEngine {
      * This gives the requesting app an instant authoritative refusal
      * rather than a multi-second timeout (bug #7 fix).
      */
-    private fun buildNxdomainPacket(
+    internal fun buildNxdomainPacket(
         originalPacket: ByteArray,
         ihl: Int,
         dnsQuery: ByteArray,
