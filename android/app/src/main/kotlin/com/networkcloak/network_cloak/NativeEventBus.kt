@@ -98,17 +98,22 @@ object NativeEventBus {
         bytes: Int,
         allowed: Boolean,
     ) {
-        connectionEventBuffer.add(mapOf(
-            "uid"       to uid,
-            "appId"     to appId,
-            "destHost"  to destHost,
-            "destIp"    to destIp,
-            "port"      to port,
-            "protocol"  to protocol,
-            "bytes"     to bytes,
-            "allowed"   to allowed,
-            "timestamp" to System.currentTimeMillis(),
-        ))
+        synchronized(connectionEventBuffer) {
+            if (connectionEventBuffer.size >= 500) {
+                connectionEventBuffer.removeAt(0)
+            }
+            connectionEventBuffer.add(mapOf(
+                "uid"       to uid,
+                "appId"     to appId,
+                "destHost"  to destHost,
+                "destIp"    to destIp,
+                "port"      to port,
+                "protocol"  to protocol,
+                "bytes"     to bytes,
+                "allowed"   to allowed,
+                "timestamp" to System.currentTimeMillis(),
+            ))
+        }
     }
 
     fun postNetworkChanged(

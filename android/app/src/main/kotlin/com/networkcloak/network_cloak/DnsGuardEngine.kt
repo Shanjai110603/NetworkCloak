@@ -297,12 +297,12 @@ object DnsGuardEngine {
             out.write(dnsPayload)
             out.flush()
 
-            // ── Read HTTP response ────────────────────────────────
-            val responseBytes = sslSocket.inputStream.readBytes()
+            // ── Read HTTP response headers & body ─────────────────
+            val dnsResponse = readHttpDnsResponse(sslSocket.inputStream)
             sslSocket.close()
 
-            val dnsResponse = parseHttpBody(responseBytes) ?: run {
-                Log.w(TAG, "DoH response parse failed")
+            if (dnsResponse == null) {
+                Log.w(TAG, "DoH response parse or non-200 status")
                 return
             }
 
@@ -316,15 +316,112 @@ object DnsGuardEngine {
     }
 
     /**
-     * Parses the body out of a raw HTTP/1.1 response byte array.
-     * Handles chunked and content-length responses.
+     * Reads a DoH HTTP/1.1 response from the SSL socket input stream.
+     * Parses the HTTP status line (must be 200 OK), headers (Content-Length / Transfer-Encoding),
+     * and reads the body payload immediately without waiting for socket EOF.
      */
-    private fun parseHttpBody(raw: ByteArray): ByteArray? {
-        val str = raw.toString(Charsets.ISO_8859_1)
-        val headerEnd = str.indexOf("\r\n\r\n")
-        if (headerEnd < 0) return null
-        val body = raw.copyOfRange(headerEnd + 4, raw.size)
-        return if (body.isEmpty()) null else body
+    private fun readHttpDnsResponse(input: java.io.InputStream): ByteArray? {
+        val headerStream = ByteArrayOutputStream()
+        var b: Int
+        var prev3 = 0
+        var prev2 = 0
+        var prev1 = 0
+
+        // Read header section byte-by-byte until \r\n\r\n
+        while (input.read().also { b = it } != -1) {
+            headerStream.write(b)
+            if (prev3 == '\r'.code && prev2 == '\n'.code && prev1 == '\r'.code && b == '\n'.code) {
+                break
+            }
+            prev3 = prev2
+            prev2 = prev1
+            prev1 = b
+        }
+
+        val headerBytes = headerStream.toByteArray()
+        if (headerBytes.isEmpty()) return null
+
+        val headerText = String(headerBytes, Charsets.ISO_8859_1)
+        val lines = headerText.split("\r\n")
+        if (lines.isEmpty()) return null
+
+        // Verify status line e.g. "HTTP/1.1 200 OK"
+        val statusLine = lines[0]
+        if (!statusLine.contains(" 200 ")) {
+            Log.w(TAG, "DoH HTTP response status non-200: $statusLine")
+            return null
+        }
+
+        // Parse headers
+        var contentLength = -1
+        var isChunked = false
+        for (i in 1 until lines.size) {
+            val line = lines[i]
+            val colonIdx = line.indexOf(':')
+            if (colonIdx > 0) {
+                val key = line.substring(0, colonIdx).trim().lowercase()
+                val value = line.substring(colonIdx + 1).trim()
+                if (key == "content-length") {
+                    contentLength = value.toIntOrNull() ?: -1
+                } else if (key == "transfer-encoding" && value.lowercase().contains("chunked")) {
+                    isChunked = true
+                }
+            }
+        }
+
+        // Read payload body based on headers
+        return when {
+            contentLength >= 0 -> {
+                val body = ByteArray(contentLength)
+                var totalRead = 0
+                while (totalRead < contentLength) {
+                    val read = input.read(body, totalRead, contentLength - totalRead)
+                    if (read == -1) break
+                    totalRead += read
+                }
+                if (totalRead == contentLength) body else null
+            }
+            isChunked -> {
+                readChunkedBody(input)
+            }
+            else -> {
+                // Fallback if no length header: read until EOF or timeout
+                val bodyStream = ByteArrayOutputStream()
+                val buf = ByteArray(1024)
+                var len: Int
+                try {
+                    while (input.read(buf).also { len = it } != -1) {
+                        bodyStream.write(buf, 0, len)
+                    }
+                } catch (_: Exception) {}
+                bodyStream.toByteArray().takeIf { it.isNotEmpty() }
+            }
+        }
+    }
+
+    /** Un-chunks HTTP chunked encoding stream data. */
+    private fun readChunkedBody(input: java.io.InputStream): ByteArray? {
+        val out = ByteArrayOutputStream()
+        val reader = java.io.BufferedReader(java.io.InputStreamReader(input, Charsets.ISO_8859_1))
+        while (true) {
+            val hexLine = reader.readLine() ?: break
+            val chunkSize = hexLine.trim().split(";")[0].toIntOrNull(16) ?: break
+            if (chunkSize == 0) break
+
+            var remaining = chunkSize
+            val buf = ByteArray(1024)
+            while (remaining > 0) {
+                val readLen = Math.min(remaining, buf.size)
+                val bytesRead = input.read(buf, 0, readLen)
+                if (bytesRead == -1) break
+                out.write(buf, 0, bytesRead)
+                remaining -= bytesRead
+            }
+            // Read trailing CRLF after chunk
+            input.read()
+            input.read()
+        }
+        return out.toByteArray().takeIf { it.isNotEmpty() }
     }
 
     // ── Packet Construction ───────────────────────────────────────

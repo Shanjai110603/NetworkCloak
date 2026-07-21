@@ -66,18 +66,16 @@ data class RuleWithConditions(
 
         /**
          * Parses rule conditions from JSON.
-         * Note: This uses flat regex-based string extraction which is 100% portable on pure JVMs,
-         * but assumes a flat, non-nested JSON schema. If nested conditions or logical operators
-         * are introduced in the future, this must be migrated to a fully compliant JSON parser.
+         * Supports both camelCase and snake_case keys (e.g. networkType / network_type).
          */
         private fun parseConditions(json: String): RuleConditions? {
             val trimmed = json.trim()
             if (trimmed == "{}" || trimmed.isEmpty()) return null
             return try {
-                val netType = extractStringField(trimmed, "networkType")
-                val trust   = extractStringField(trimmed, "trustLevel")
-                val start   = extractIntField(trimmed, "hourStart")
-                val end     = extractIntField(trimmed, "hourEnd")
+                val netType = extractStringField(trimmed, "networkType") ?: extractStringField(trimmed, "network_type")
+                val trust   = extractStringField(trimmed, "trustLevel")  ?: extractStringField(trimmed, "trust_level")
+                val start   = extractIntField(trimmed, "hourStart")     ?: extractIntField(trimmed, "hour_start")
+                val end     = extractIntField(trimmed, "hourEnd")       ?: extractIntField(trimmed, "hour_end")
 
                 if (netType == null && trust == null && start == null && end == null) {
                     return null
@@ -468,12 +466,15 @@ object RuleRepository {
     }
 
     internal fun isLanAddress(ip: String): Boolean {
-        if (ip.isEmpty()) return false
-        return ip.startsWith("192.168.") ||
-               ip.startsWith("10.") ||
-               (ip.startsWith("172.") && run {
-                   val second = ip.split(".").getOrNull(1)?.toIntOrNull() ?: 0
-                   second in 16..31
-               })
+        val cleanIp = ip.trim()
+        if (cleanIp.isEmpty()) return false
+        if (cleanIp == "127.0.0.1" || cleanIp.startsWith("127.")) return true
+        if (cleanIp.startsWith("169.254.")) return true
+        if (cleanIp.startsWith("192.168.") || cleanIp.startsWith("10.")) return true
+        if (cleanIp.startsWith("172.")) {
+            val second = cleanIp.split(".").getOrNull(1)?.toIntOrNull() ?: 0
+            if (second in 16..31) return true
+        }
+        return false
     }
 }
