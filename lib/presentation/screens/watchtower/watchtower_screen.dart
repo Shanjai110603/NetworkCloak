@@ -31,10 +31,47 @@ class _WatchtowerScreenState extends ConsumerState<WatchtowerScreen>
 
   @override
   Widget build(BuildContext context) {
+    final throughput = ref.watch(throughputProvider);
+
     return Scaffold(
       backgroundColor: NcColors.bg,
       appBar: AppBar(
         title: const Text('Watchtower'),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: NcColors.surfaceElevated,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: NcColors.primary.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: const BoxDecoration(
+                      color: NcColors.protected,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _fmtSpeedHeader(throughput.currentSpeed),
+                    style: const TextStyle(
+                      color: NcColors.primary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
         bottom: TabBar(
           controller: _tabs,
           indicatorColor: NcColors.primary,
@@ -56,6 +93,14 @@ class _WatchtowerScreenState extends ConsumerState<WatchtowerScreen>
         ],
       ),
     );
+  }
+
+  String _fmtSpeedHeader(double bytesPerSec) {
+    if (bytesPerSec < 1024) return '${bytesPerSec.toStringAsFixed(0)} B/s';
+    final kb = bytesPerSec / 1024;
+    if (kb < 1024) return '${kb.toStringAsFixed(1)} KB/s';
+    final mb = kb / 1024;
+    return '${mb.toStringAsFixed(1)} MB/s';
   }
 }
 
@@ -866,13 +911,27 @@ class _RealTimeTrafficDashboard extends ConsumerWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Network Activity',
-                    style: TextStyle(
-                      color: NcColors.textSecondary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  Row(
+                    children: [
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          color: NcColors.protected,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'LIVE NETWORK SPEED',
+                        style: TextStyle(
+                          color: NcColors.textSecondary,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
