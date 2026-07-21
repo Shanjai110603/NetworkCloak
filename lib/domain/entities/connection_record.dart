@@ -49,6 +49,7 @@ class LiveConnection {
     required this.protocol,
     required this.startedAt,
     required this.bytes,
+    this.allowed = true,
   });
 
   final String id;
@@ -57,6 +58,7 @@ class LiveConnection {
   final String protocol;
   final DateTime startedAt;
   final int bytes;
+  final bool allowed;
 
   Duration get duration => DateTime.now().difference(startedAt);
 }

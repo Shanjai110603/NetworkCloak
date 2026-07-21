@@ -108,7 +108,7 @@ class _LiveTab extends ConsumerWidget {
               destIp: c.dest,
               protocol: c.protocol,
               bytes: c.bytes,
-              allowed: true,
+              allowed: c.allowed,
               onTap: () => _showConnectionDetails(
                 context: ctx,
                 ref: ref,
@@ -117,7 +117,7 @@ class _LiveTab extends ConsumerWidget {
                 destIp: c.dest,
                 protocol: c.protocol,
                 bytes: c.bytes,
-                allowed: true,
+                allowed: c.allowed,
               ),
             );
           },

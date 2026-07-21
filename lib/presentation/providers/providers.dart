@@ -477,22 +477,96 @@ class FirewallRulesNotifier
 // Watchtower — Live Connections
 // ─────────────────────────────────────────────────────────────
 
-final liveConnectionsProvider = StreamProvider<List<LiveConnection>>((ref) async* {
+final watchtowerSyncProvider = Provider<void>((ref) {
+  final db = ref.watch(databaseProvider);
   final bridge = ref.watch(platformBridgeProvider);
-  // Start with empty state — no mock data
+
+  bridge.connectionEvents.listen((batch) async {
+    final now = DateTime.now();
+    final todayStr = now.toIso8601String().substring(0, 10);
+
+    for (final e in batch) {
+      final appId = e['appId'] as String? ?? 'unknown';
+      final destHost = e['destHost'] as String? ?? e['destIp'] as String? ?? '?';
+      final destIp = e['destIp'] as String? ?? destHost;
+      final port = e['port'] as int? ?? 0;
+      final protocol = e['protocol'] as String? ?? 'TCP';
+      final allowed = e['allowed'] as bool? ?? true;
+      final bytes = e['bytes'] as int? ?? 0;
+      final timestamp = e['timestamp'] as int? ?? now.millisecondsSinceEpoch;
+      final actionStr = allowed ? 'allow' : 'block';
+
+      // 1. Persist connection event into ConnectionHistory table
+      try {
+        await db.into(db.connectionHistory).insert(
+          ConnectionHistoryCompanion.insert(
+            appId: appId,
+            destHost: destHost,
+            destIp: Value(destIp),
+            port: Value(port),
+            protocol: Value(protocol),
+            action: actionStr,
+            bytes: Value(bytes),
+            timestamp: timestamp,
+          ),
+        );
+      } catch (err) {
+        debugPrint('[NC] ConnectionHistory insert error: $err');
+      }
+
+      // 2. Aggregate & update ApplicationStats table for Bandwidth tab
+      try {
+        final statId = '${appId}_$todayStr';
+        final existing = await (db.select(db.applicationStats)
+          ..where((t) => t.id.equals(statId)))
+          .getSingleOrNull();
+
+        if (existing == null) {
+          await db.into(db.applicationStats).insert(
+            ApplicationStatsCompanion.insert(
+              id: statId,
+              appId: appId,
+              connections: const Value(1),
+              blocked: Value(allowed ? 0 : 1),
+              bytesSent: Value(bytes),
+              bytesRecv: const Value(0),
+              statDate: todayStr,
+            ),
+          );
+        } else {
+          await (db.update(db.applicationStats)..where((t) => t.id.equals(statId)))
+            .write(
+              ApplicationStatsCompanion(
+                connections: Value(existing.connections + 1),
+                blocked: Value(existing.blocked + (allowed ? 0 : 1)),
+                bytesSent: Value(existing.bytesSent + bytes),
+              ),
+            );
+        }
+      } catch (err) {
+        debugPrint('[NC] ApplicationStats update error: $err');
+      }
+    }
+  });
+});
+
+final liveConnectionsProvider = StreamProvider<List<LiveConnection>>((ref) async* {
+  ref.watch(watchtowerSyncProvider);
+  final bridge = ref.watch(platformBridgeProvider);
   final list = <LiveConnection>[];
   yield list;
 
   await for (final batch in bridge.connectionEvents) {
     for (final e in batch) {
       final conn = LiveConnection(
-        id: '${e['uid']}_${e['timestamp']}',
+        id: '${e['uid']}_${e['timestamp']}_${e['destIp']}',
         appId: e['appId'] as String? ?? 'unknown',
         dest: e['destHost'] as String? ?? e['destIp'] as String? ?? '?',
         protocol: e['protocol'] as String? ?? 'TCP',
         startedAt: DateTime.fromMillisecondsSinceEpoch(
             e['timestamp'] as int? ?? 0),
         bytes: e['bytes'] as int? ?? 0,
+        allowed: e['allowed'] as bool? ?? true,
       );
       list.insert(0, conn);
       if (list.length > 200) list.removeLast();
@@ -745,30 +819,29 @@ class DnsProfileNotifier extends StateNotifier<DnsProfile> {
 // Connection History & Stats
 // ─────────────────────────────────────────────────────────────
 
-final connectionHistoryProvider = FutureProvider<List<ConnectionRecord>>((ref) async {
+final connectionHistoryProvider = StreamProvider<List<ConnectionRecord>>((ref) {
   final db = ref.watch(databaseProvider);
-  final rows = await db.select(db.connectionHistory).get();
-  // No mock data — return empty list when DB is empty
-  return rows.map((r) => ConnectionRecord(
-    id: r.id,
-    appId: r.appId,
-    destHost: r.destHost,
-    destIp: r.destIp ?? '',
-    port: r.port ?? 80,
-    protocol: r.protocol ?? 'TCP',
-    action: RuleAction.values.firstWhere(
-      (a) => a.name == r.action,
-      orElse: () => RuleAction.allow,
-    ),
-    bytes: r.bytes ?? 0,
-    timestamp: DateTime.fromMillisecondsSinceEpoch(r.timestamp),
-  )).toList();
+  return (db.select(db.connectionHistory)
+        ..orderBy([(t) => OrderingTerm(expression: t.timestamp, mode: OrderingMode.desc)]))
+      .watch()
+      .map((rows) => rows
+          .map((r) => ConnectionRecord(
+                id: r.id,
+                appId: r.appId,
+                destHost: r.destHost,
+                destIp: r.destIp ?? '',
+                port: r.port ?? 80,
+                protocol: r.protocol ?? 'TCP',
+                action: r.action == 'block' ? RuleAction.block : RuleAction.allow,
+                bytes: r.bytes ?? 0,
+                timestamp: DateTime.fromMillisecondsSinceEpoch(r.timestamp),
+              ))
+          .toList());
 });
 
-final applicationStatsProvider = FutureProvider<List<ApplicationStat>>((ref) async {
+final applicationStatsProvider = StreamProvider<List<ApplicationStat>>((ref) {
   final db = ref.watch(databaseProvider);
-  final rows = await db.select(db.applicationStats).get();
-  return rows;
+  return db.select(db.applicationStats).watch();
 });
 
 final notificationsEnabledProvider = StateNotifierProvider<NotificationsEnabledNotifier, bool>((ref) {
