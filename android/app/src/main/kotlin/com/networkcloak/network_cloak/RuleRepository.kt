@@ -447,13 +447,14 @@ object RuleRepository {
         return true
     }
 
-    // ── Action resolution ─────────────────────────────────────────
+    @Volatile var isScreenOn: Boolean = true
 
     private fun resolveAction(action: String, isBackground: Boolean, destIp: String): String {
         return when (action) {
             "block", "temporaryBlock"    -> "block"
             "allow", "temporaryAllow"    -> "allow"
             "blockBackground"            -> if (isBackground) "block" else "allow"
+            "screenOnOnly"               -> if (isScreenOn) "allow" else "block"
             "allowLanOnly"               -> if (isLanAddress(destIp)) "allow" else "block"
             "allowInternetOnly"          -> if (!isLanAddress(destIp)) "allow" else "block"
             // "ask" fails closed per Volume I §4 Safe Defaults.

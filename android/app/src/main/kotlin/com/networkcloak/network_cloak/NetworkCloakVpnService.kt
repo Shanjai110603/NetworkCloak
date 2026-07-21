@@ -245,6 +245,11 @@ class NetworkCloakVpnService : VpnService() {
             return
         }
 
+        AppStateTracker.startMonitoring(this) {
+            configureVpn()
+        }
+        registerScreenReceiver()
+
         currentMode = mode
         persistProtectionState(mode)
 
@@ -258,11 +263,48 @@ class NetworkCloakVpnService : VpnService() {
         workerThread = Thread({ packetLoop() }, "NC-PacketLoop").also { it.start() }
     }
 
+    private var screenReceiver: android.content.BroadcastReceiver? = null
+
+    private fun registerScreenReceiver() {
+        if (screenReceiver != null) return
+        val filter = android.content.IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        screenReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON -> {
+                        RuleRepository.isScreenOn = true
+                        configureVpn()
+                    }
+                    Intent.ACTION_SCREEN_OFF -> {
+                        RuleRepository.isScreenOn = false
+                        configureVpn()
+                    }
+                }
+            }
+        }
+        try {
+            registerReceiver(screenReceiver, filter)
+        } catch (e: Exception) {
+            Log.w(TAG, "Screen receiver setup failed: ${e.message}")
+        }
+    }
+
+    private fun unregisterScreenReceiver() {
+        screenReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+            screenReceiver = null
+        }
+    }
+
     private fun stopVpn(reason: String) {
         if (!running.getAndSet(false)) return
         Log.i(TAG, "Stopping VPN: $reason")
 
         workerThread?.interrupt()
+        unregisterScreenReceiver()
 
         // Cancel coroutine scope and close TUN writer channel
         scope.coroutineContext.cancelChildren()

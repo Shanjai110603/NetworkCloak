@@ -27,10 +27,11 @@ object UidMapper {
 
 /**
  * Tracks which apps are currently in the foreground vs background.
- * Updated by the ActivityManager usage stats query on each network change.
+ * Updated in real-time by ActivityManager.OnUidImportanceListener.
  */
 object AppStateTracker {
     private val backgroundUids = HashSet<Int>()
+    @Volatile private var listenerRegistered = false
 
     fun isBackground(uid: Int): Boolean = synchronized(backgroundUids) {
         backgroundUids.contains(uid)
@@ -42,5 +43,30 @@ object AppStateTracker {
 
     fun setForeground(uid: Int) = synchronized(backgroundUids) {
         backgroundUids.remove(uid)
+    }
+
+    /**
+     * Registers ActivityManager.OnUidImportanceListener on Android 8.0+ (API 26+)
+     * to monitor real-time app process importance transitions.
+     */
+    fun startMonitoring(context: Context, onImportanceChanged: (() -> Unit)? = null) {
+        if (listenerRegistered) return
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            try {
+                val am = context.applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+                am?.addOnUidImportanceListener({ uid, importance ->
+                    val isBg = importance > android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE
+                    val changed = synchronized(backgroundUids) {
+                        if (isBg) backgroundUids.add(uid) else backgroundUids.remove(uid)
+                    }
+                    if (changed) {
+                        onImportanceChanged?.invoke()
+                    }
+                }, android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)
+                listenerRegistered = true
+            } catch (e: Exception) {
+                android.util.Log.w("NC-AppState", "OnUidImportanceListener setup skipped: ${e.message}")
+            }
+        }
     }
 }
