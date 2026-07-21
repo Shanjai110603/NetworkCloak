@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/providers.dart';
 import '../../../app/theme/app_theme.dart';
 
-class CloakComingSoonScreen extends ConsumerWidget {
-  const CloakComingSoonScreen({super.key});
+class CloakScreen extends ConsumerWidget {
+  const CloakScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

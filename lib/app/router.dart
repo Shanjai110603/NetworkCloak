@@ -9,7 +9,7 @@ import '../presentation/screens/settings/settings_screen.dart';
 import '../presentation/screens/onboarding/onboarding_flow.dart';
 
 import '../presentation/screens/alerts/alerts_screen.dart';
-import '../presentation/screens/settings/cloak_coming_soon_screen.dart';
+import '../presentation/screens/settings/cloak_screen.dart';
 import '../presentation/screens/settings/notifications_settings_screen.dart';
 import '../presentation/screens/settings/appearance_screen.dart';
 import '../presentation/screens/settings/data_retention_screen.dart';
@@ -34,7 +34,7 @@ final router = GoRouter(
     ),
     GoRoute(
       path: '/settings/cloak',
-      builder: (ctx, state) => const CloakComingSoonScreen(),
+      builder: (ctx, state) => const CloakScreen(),
     ),
     GoRoute(
       path: '/settings/notifications',
