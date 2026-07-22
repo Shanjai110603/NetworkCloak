@@ -1,6 +1,6 @@
 # Network Cloak — Technical Architecture & Implementation Guide
 
-Welcome to the technical blueprint of **Network Cloak**. This document details the architectural components, execution flows, native platform bridge mechanics, database schema, and custom engines that power Network Cloak’s localized device shielding and network privacy utilities.
+Welcome to the technical blueprint of **Network Cloak**. This document details the architectural components, execution flows, native platform bridge mechanics, database schema, and custom security engines that power Network Cloak’s localized device shielding and network privacy utilities.
 
 ---
 
@@ -20,6 +20,7 @@ graph TD
         Providers <-->|Drift ORM| DB[(SQLite Database)]
         Providers -->|MethodChannel API Calls| PlatformBridge[Platform Channel Bridge]
         PlatformBridge <-->|EventChannel Listeners| BatchHandler[Event Batch Handler]
+        Providers <-->|System TrafficStats Poll| KernelStats[24/7 Live Throughput Engine]
     end
 
     %% Native Enforcers (Kotlin)
@@ -27,11 +28,13 @@ graph TD
         PlatformBridge <-->|MethodChannel| NativeChannel[Platform Channel Handler]
         NativeChannel -->|Sets Rules / Config| Rules[(In-Memory Rule Repository)]
         NativeChannel -->|Syncs Blocklists| DnsEngine[DNS Guard Engine]
+        NativeChannel -->|Foreground Service Ops| VpnLifecycle[Android VpnService Lifecycle Manager]
 
         VpnService[NetworkCloakVpnService] <-->|Capture Packets| TUN[Virtual TUN Interface]
         VpnService -->|Evaluate Rules| Rules
         VpnService -->|Intercept DNS queries| DnsEngine
         VpnService -->|Multicast/Broadcast Filters| Cloak[Cloak Shield Engine]
+        VpnService -->|Zero-Latency App State| UidMapper[ActivityManager Reflection Proxy]
 
         %% Buffered Connection Logs
         VpnService -->|Log ConnectionEvent| LogQueue[Native Event Buffer]
@@ -40,7 +43,7 @@ graph TD
 
     %% Outgoing Networking
     Rules -->|Allow/Forward| WAN[Internet Gateway]
-    Rules -->|Drop| Drop[Connection Terminated]
+    Rules -->|Drop / TCP RST / DNS NXDOMAIN| Drop[Connection Terminated]
     Cloak -->|Block Multicast/SMB| Drop
     DnsEngine -->|Block / Resolve Local| Client[DNS Response Payload]
     DnsEngine -->|Forward Valid Queries| DoH[Secure DoH Resolvers]
@@ -52,13 +55,14 @@ graph TD
 
 The core protection of Network Cloak resides inside the custom Kotlin package `com.networkcloak.network_cloak` running inside the Android OS background process space.
 
-### A. Virtual TUN Interface & Packet Processing
+### A. Virtual TUN Interface & Per-App Routing Strategy
 The `NetworkCloakVpnService` class subclasses Android's standard `VpnService` API.
-* **Interface Establishment**: Upon starting, the service establishes a virtual network TUN interface (`FileDescriptor`) configured with private IPv4 subnets (e.g. `10.0.0.2/32`) and a default gateway route (`0.0.0.0/0`) intercepting all outbound packets.
-* **Loop Thread**: A dedicated worker thread runs a packet loop that reads raw bytes from the TUN interface descriptor into a buffer:
-  * **Header Parsing**: Parses the raw byte buffer to isolate the IPv4 header (extracting source IP, destination IP, payload protocol identifier).
-  * **Protocol Multiplexing**: If the payload is UDP or TCP, it further parses the transport header to extract source and destination ports.
-  * **Local App Attribution**: Uses the native socket identifier mappings or Linux `/proc/net` files (via socket owner UIDs) to match the packet to the Android application package identifier (e.g., `com.whatsapp`, `com.android.chrome`).
+* **Interface Establishment**: Upon starting, the service establishes a virtual network TUN interface (`FileDescriptor`) configured with private IPv4 subnets (`10.0.0.1/32`) and optional IPv6 routes (`2001:db8:1::1/64`, wrapped safely in try-catch for kernel compatibility).
+* **Per-App TUN Routing**:
+  To ensure zero latency and prevent TCP loopback recursion without needing native third-party binaries:
+  * **Blocked Apps**: Added to the TUN interface via `builder.addAllowedApplication(pkg)`. Their TCP packets receive immediate `TCP RST` packets; UDP/ICMP packets are dropped silently; DNS queries receive instant `NXDOMAIN` (RCODE 3 - Domain Not Found).
+  * **Allowed Apps**: Bypass the TUN interface entirely and use the OS network stack natively over IPv4 & IPv6 with zero lag.
+  * **Lockdown Mode**: Intercepts all device applications, routing everything into the TUN interface while excluding only essential telephony (`com.android.phone`) and allowlisted emergency apps.
 
 ### B. Cloak Shield Engine (SSDP, SMB, mDNS Blockers)
 To make the device completely invisible on local area networks (LANs), the native `RuleRepository` drops local discovery and network exposure protocols before they escape the device:
@@ -70,44 +74,20 @@ To make the device completely invisible on local area networks (LANs), the nativ
   * **SMB / Server Message Block** (TCP Port `445`)
   * **SSDP / Simple Service Discovery Protocol** (UDP Port `1900`)
 
-### C. Live Speed & Connection Event Batching (`NativeEventBus`)
-Reporting each intercepted packet to Flutter creates severe performance issues. At high throughput (e.g., a 10 MB/s download), this can trigger over 7,000 serialized messages per second over the platform channel, causing the Flutter UI thread to drop frames and freeze.
-* **Aggregator Buffer**: The `NativeEventBus` utilizes a thread-safe synchronized list to accumulate connection metadata events.
-* **Timer Flush**: A background timer flushes accumulated events every **500 milliseconds**, serializing the lists into a single payload block.
-* **Batch Yield**: Flutter parses this batch as a single transaction, reducing platform channel CPU load by **99%** and allowing smooth graph rendering on the canvas.
+### C. Live Speed & System Kernel TrafficStats (VPN ON & VPN OFF)
+Watchtower monitors real-time network throughput 24 hours a day, 7 days a week:
+* **Kernel TrafficStats Sampling**: `ThroughputNotifier` polls system kernel counters (`TrafficStats.getTotalRxBytes()` and `TrafficStats.getTotalTxBytes()`) every second via `PlatformChannelBridge.getSystemTrafficStats()`.
+* **Dynamic Breakdown**: Calculates current Download speed (▼ Rx B/s, KB/s, MB/s) and Upload speed (▲ Tx B/s, KB/s, MB/s) regardless of whether the VPN is running or stopped.
+* **Aggregator Buffer (`NativeEventBus`)**: When the VPN is active, connection metadata events flush in 500ms batches over the `EventChannel`, updating the live connections log with 0 dropped UI frames.
 
 ### D. DNS Guard Engine
 Intercepts outgoing DNS requests (UDP port `53`) dynamically:
 * **Category Filtering**: Compares the queried domain against lists parsed in memory (Ads, tracking, telemetry, adult content, etc.). If matched, the query returns `NXDOMAIN` (non-existent domain) locally without forwarding.
-* **DoH Forwarding**: Valid requests are resolved via a secure DNS-over-HTTPS (DoH) resolver. To prevent a bootstrapping loop where the system default DNS fails while the VPN is coming up, DoH URLs must contain IP-literals (e.g., `https://1.1.1.1/dns-query`) coupled with a hostname for TLS certificate verification.
+* **DoH Forwarding**: Valid requests are resolved via a secure DNS-over-HTTPS (DoH) resolver using IP-literals to prevent DNS bootstrapping loops.
 
 ---
 
-## 3. SQLite Database Schema & Drift ORM
-
-Network Cloak stores all operational parameters, connection statistics, geolocated connections, and rules locally on-device. The database schema is configured via **Drift ORM** in Dart:
-
-| Table Name | Primary Key | Purpose | Key Columns / Schema Details |
-| :--- | :--- | :--- | :--- |
-| `Settings` | `(category, key)` | Key-value settings store | `key`, `value`, `value_type`, `updated_at` |
-| `Profiles` | `id` | Network profiles (e.g., Home, Work) | `name`, `type`, `is_system`, `config_json` |
-| `FirewallRules` | `id` | Per-app rule enforcements | `app_id`, `action` (Allow/Block/Ask), `profile_id` |
-| `TemporaryRules` | `id` | Time-limited firewall overrides | `app_id`, `action`, `start_at`, `end_at` |
-| `SessionRules` | `id` | One-off VPN session permissions | `app_id`, `action`, `session_id` |
-| `TrustedNetworks` | `id` | Wi-Fi fingerprints to evaluate Evil Twin | `ssid`, `bssid`, `trust_level` |
-| `DnsProfiles` | `id` | Active configuration for DNS resolving | `name`, `provider`, `endpoint`, `blocklists` (JSON) |
-| `DnsBlocklists` | `id` | Synced lists of categories | `name`, `category`, `enabled`, `url`, `domain_count` |
-| `DnsLogs` | `id` (Auto) | Persistent history of DNS queries | `domain`, `action`, `app_id`, `timestamp` |
-| `Applications` | `id` | Cached list of installed system/user apps | `package_name` (Unique), `display_name`, `icon_bytes` |
-| `ApplicationStats` | `id` | Aggregate bandwidth data per app | `app_id`, `connections`, `bytes_sent`, `bytes_recv` |
-| `ConnectionHistory` | `id` (Auto) | Log of all inbound/outbound packets | `app_id`, `dest_host`, `dest_ip`, `latitude`, `longitude` |
-| `Alerts` | `id` | Threat notifications (e.g., Evil Twin flag) | `type`, `severity`, `title`, `body`, `status` |
-| `LiveConnections` | `id` | Real-time active socket connections | `app_id`, `dest`, `bytes`, `started_at` |
-| `SchemaVersions` | `version` | Migration verification log | `version`, `applied_at`, `description` |
-
----
-
-## 4. Rule Evaluation Precedence
+## 3. Rule Evaluation Precedence
 
 The native firewall engine evaluates connection permissions using a strictly ordered cascading hierarchy:
 
@@ -135,28 +115,16 @@ The native firewall engine evaluates connection permissions using a strictly ord
 
 ---
 
-## 5. UI Layout & UX Design System
+## 4. Android 14 (API 34) & Foreground Service Compliance
 
-Network Cloak incorporates a customized design system using **Stealth Dark (Dark Mode)** and **High-Clarity Light Mode**:
-
-* **Theme Definitions (`NcColors`)**:
-  * `bg`: Deep obsidian black (`0xFF0A0E17`) in Dark mode; pure soft white (`0xFFF8F9FD`) in Light mode.
-  * `surface`: Charcoal slate (`0xFF121824`) / Warm light-grey (`0xFFFFFFFF`).
-  * `primary`: High-visibility electric blue (`0xFF2563EB`) / Cyan-blue (`0xFF1D4ED8`).
-  * `border`: Dark steel grey (`0xFF1F2937`) / Pale grey (`0xFFE5E7EB`).
-  * Action Colors: `chipAllow` (green `0xFF10B981`), `chipBlock` (red `0xFFEF4444`), `chipAsk` (orange `0xFFF59E0B`).
-
-* **De-congested Rule Tiles**: 
-  App rule list tiles are split into two sections:
-  1. *Header*: Displays the package icon, high-weight text showing the display name, package suffix, and current rule badge (`Allowed`, `Blocked`, `Ask`).
-  2. *Footer*: A dedicated bottom actions section housing the active network profile dropdown, live network chips (`Wi-Fi`, `Cellular`, `LAN`, `Background`), and three large quick-action selector buttons (`Allow`, `Block`, `Ask`). When active, buttons toggle to a solid colored fill state.
+* **Foreground Service Startup**: `MainActivity.kt`, `PlatformChannelHandler.kt`, and `BootReceiver.kt` use `ContextCompat.startForegroundService(intent)` on Android 8.0+ (API 26+) to eliminate `ForegroundServiceStartNotAllowedException` crashes.
+* **Android 14 Special Use Type**: `NetworkCloakVpnService` declares `android:foregroundServiceType="specialUse"` in `AndroidManifest.xml` and passes `ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE` to `startForeground()` on Android 14 (API 34+).
 
 ---
 
-## 6. How to Build & Run Tests
+## 5. How to Build & Run Tests
 
 ### Generate Code Bindings (Drift ORM)
-Generate compiled code database mapping configurations:
 ```bash
 flutter pub run build_runner build --delete-conflicting-outputs
 ```
@@ -167,7 +135,11 @@ flutter analyze
 ```
 
 ### Execute Unit & Integration Tests
-Run unit tests for network classification and rule resolution:
 ```bash
 flutter test
+```
+
+### Build Release APK
+```bash
+flutter build apk
 ```

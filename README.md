@@ -2,7 +2,7 @@
 
 A premium, high-performance Flutter & Android VPN utility designed to protect mobile devices from local network threats, scan exposure, and untrusted network eavesdropping. 
 
-Network Cloak combines packet-level local shielding, dynamic firewall controls, and real-time network traffic visualization to make your device completely invisible on local area networks (LANs).
+Network Cloak combines packet-level local shielding, dynamic per-app firewall controls, 24/7 real-time network speed monitoring, and DNS query filtering to keep your device secure and invisible on local area networks (LANs).
 
 ---
 
@@ -13,12 +13,13 @@ Network Cloak combines packet-level local shielding, dynamic firewall controls, 
     *   **NetBIOS** (ports `137-139`) & **SMB** (port `445`)
     *   **SSDP / UPnP** (port `1900`)
     *   Multicast IP ranges (`224.0.0.0/4`) and Broadcast (`255.255.255.255`)
-*   **Watchtower (Real-Time Traffic Monitor)**:
-    *   **Live Traffic Speedometer**: Fluid, real-time bandwidth graph powered by custom Canvas cubic Bezier painters.
-    *   **Geolocated Connection History**: Active logging of connection attempts with automatic country-flag resolution.
+*   **Watchtower (Real-Time Traffic Monitor & Speedometer)**:
+    *   **24/7 Real-Time Network Speedometer**: Live Download (▼ Rx) and Upload (▲ Tx) speed monitoring powered by system kernel `TrafficStats` and smooth cubic Bezier sparkline charts (works whether VPN is **ON** or **OFF**).
+    *   **Geolocated Connection History**: Active logging of connection attempts with dynamic country-flag resolution and reactive Drift SQLite streams.
     *   **IP Network Lookup**: Integrated on-demand ARIN RDAP network registry lookup to identify target servers.
-*   **Dynamic Firewall**: Custom per-app rules (Allow, Ask, Block) handled by a native Android VPN interceptor.
+*   **Dynamic Per-App Firewall**: Hardened per-app network blocking (Allow, Ask, Block) handled by a native Android VPN interceptor with instant IPv4 TCP RST, UDP drop, and DNS NXDOMAIN synthesis.
 *   **DNS Guard**: Safe DNS resolution and domain-level query filtering.
+*   **Android 14 (API 34) Ready**: Fully compliant with Android 14 foreground service policies and permission handling.
 *   **Stealth Theme Engine**: Custom, dynamic light and dark (Stealth) modes that sync instantly across native components and the UI.
 
 ---
@@ -47,9 +48,10 @@ graph TD
 Network Cloak/
 ├── android/                   # Kotlin VPN implementation & unit tests
 │   └── app/src/main/kotlin/com/networkcloak/network_cloak/
-│       ├── NetworkCloakVpnService.kt   # Core VpnService runner
-│       ├── RuleRepository.kt           # Local rules and Cloak engine
-│       └── PlatformChannelHandler.kt   # Method channel communication
+│       ├── NetworkCloakVpnService.kt   # Core VpnService runner & packet loop
+│       ├── RuleRepository.kt           # Local rules, per-app logic & Cloak engine
+│       ├── PlatformChannelHandler.kt   # Method channel communication & TrafficStats
+│       └── MainActivity.kt             # Flutter Activity & VPN permission handler
 ├── lib/                       # Flutter Application source code
 │   ├── app/
 │   │   ├── theme/             # NcColors, NcTextStyles, AppTheme (Light & Dark)
@@ -102,15 +104,7 @@ Run unit and widget tests:
 flutter test
 ```
 
-### Android (Kotlin) Tests
-Verify native rule parsing and the packet blocking engine:
-```bash
-cd android
-./gradlew test
-```
-
 ### Static Analysis
-Run static analysis checks:
 ```bash
 flutter analyze
 ```
