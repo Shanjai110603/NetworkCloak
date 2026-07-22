@@ -28,16 +28,22 @@ class MainActivity : FlutterActivity() {
      */
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 1003 && resultCode == RESULT_OK) {
-            // User approved the VPN permission dialog — start the foreground service!
-            val intent = Intent(this, NetworkCloakVpnService::class.java).apply {
-                putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START)
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
+        if (resultCode != RESULT_OK) return
+
+        // requestCode 1003 = Full Protection, requestCode 1004 = Quick Block (bug #8 regression guard)
+        val action = when (requestCode) {
+            1003 -> NetworkCloakVpnService.ACTION_START
+            1004 -> NetworkCloakVpnService.ACTION_START_QUICK_BLOCK
+            else -> return
+        }
+
+        val intent = Intent(this, NetworkCloakVpnService::class.java).apply {
+            putExtra(NetworkCloakVpnService.ACTION_KEY, action)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
         }
     }
 }

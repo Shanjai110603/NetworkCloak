@@ -106,8 +106,12 @@ object PlatformChannelHandler {
                 // Read blockLan flag from the call and apply it (D4)
                 val blockLan = call.argument<Boolean>("blockLan") ?: false
                 RuleRepository.blockLanTraffic = blockLan
-                // Update lastKnownContext so conditionsMatch() stays current
-                updateRuleContext(context)
+                val trustLevel = call.argument<String>("trustLevel")
+                if (trustLevel != null) {
+                    RuleRepository.lastKnownContext = RuleRepository.lastKnownContext.copy(trustLevel = trustLevel)
+                } else {
+                    updateRuleContext(context)
+                }
                 refreshVpnService(context)
                 result.success(null)
             }
@@ -171,11 +175,11 @@ object PlatformChannelHandler {
                     result.success(true)
                     return
                 }
-                // Start VPN in Quick Block mode
+                // Start VPN in Quick Block mode (requestCode 1004 dedicated to Quick Block — bug #8 regression guard)
                 val vpnIntent = VpnService.prepare(context)
                 if (vpnIntent != null) {
                     val activity = context as? android.app.Activity
-                    activity?.startActivityForResult(vpnIntent, 1003)
+                    activity?.startActivityForResult(vpnIntent, 1004)
                     result.success(false)
                 } else {
                     val intent = Intent(context, NetworkCloakVpnService::class.java).apply {

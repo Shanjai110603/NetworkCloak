@@ -292,9 +292,18 @@ class EvaluateRuleUseCase {
   }
 
   bool _isLanAddress(String ip) {
-    return ip.startsWith('192.168.') ||
-        ip.startsWith('10.') ||
-        RegExp(r'^172\.(1[6-9]|2[0-9]|3[01])\.').hasMatch(ip);
+    final cleanIp = ip.trim();
+    if (cleanIp.isEmpty) return false;
+    if (cleanIp == '127.0.0.1' || cleanIp.startsWith('127.')) return true;
+    if (cleanIp.startsWith('169.254.')) return true;
+    if (cleanIp.startsWith('192.168.') || cleanIp.startsWith('10.')) return true;
+    if (cleanIp.startsWith('172.')) {
+      final parts = cleanIp.split('.');
+      final second = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
+      if (second >= 16 && second <= 31) return true;
+    }
+    if (cleanIp.startsWith('fc00:') || cleanIp.startsWith('fe80:')) return true;
+    return false;
   }
 
   String _actionReason(RuleAction action) {

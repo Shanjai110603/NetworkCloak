@@ -68,14 +68,22 @@ impl IpcServer {
                         let rx = rx_events_clone.clone();
                         let writer_handle = file_writer.clone();
                         thread::spawn(move || {
-                            let rx_lock = rx.lock().unwrap();
-                            while let Ok(event) = rx_lock.recv() {
-                                let serialized = serde_json::to_string(&event).unwrap_or_default();
-                                let mut w = writer_handle.lock().unwrap();
-                                if writeln!(w, "{}", serialized).is_err() {
-                                    break; // Pipe closed
+                            loop {
+                                let event = {
+                                    let rx_lock = rx.lock().unwrap();
+                                    rx_lock.recv()
+                                };
+                                match event {
+                                    Ok(event) => {
+                                        let serialized = serde_json::to_string(&event).unwrap_or_default();
+                                        let mut w = writer_handle.lock().unwrap();
+                                        if writeln!(w, "{}", serialized).is_err() {
+                                            break; // Pipe closed
+                                        }
+                                        let _ = w.flush();
+                                    }
+                                    Err(_) => break,
                                 }
-                                let _ = w.flush();
                             }
                         });
 

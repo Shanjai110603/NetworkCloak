@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/app_theme.dart';
+import '../../providers/providers.dart';
 
 class OnboardingFlow extends ConsumerStatefulWidget {
   const OnboardingFlow({super.key});
@@ -116,11 +117,12 @@ class _OnboardingFlowState extends ConsumerState<OnboardingFlow> {
                           SizedBox(
                             width: double.infinity,
                             child: ElevatedButton(
-                              onPressed: () {
+                              onPressed: () async {
                                 if (page < _pages.length - 1) {
                                   _page.value = page + 1;
                                 } else {
-                                  context.go('/');
+                                  await markOnboardingComplete(ref);
+                                  if (context.mounted) context.go('/');
                                 }
                               },
                               child: Text(
@@ -141,7 +143,10 @@ class _OnboardingFlowState extends ConsumerState<OnboardingFlow> {
                           ] else ...[
                             const SizedBox(height: 12),
                             TextButton(
-                              onPressed: () => context.go('/'),
+                              onPressed: () async {
+                                await markOnboardingComplete(ref);
+                                if (context.mounted) context.go('/');
+                              },
                               child: Text('Skip setup',
                                   style: TextStyle(
                                       color: NcColors.textMuted)),

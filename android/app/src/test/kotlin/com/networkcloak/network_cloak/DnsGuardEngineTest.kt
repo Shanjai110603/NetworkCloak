@@ -170,4 +170,30 @@ class DnsGuardEngineTest {
             0x0000, verify,
         )
     }
+
+    // ── Test 22: UDP ports in DNS response are correctly swapped ─────────────
+    @Test
+    fun `DNS response packet has source port 53 and destination port equal to client ephemeral port`() {
+        DnsGuardEngine.updateBlocklists(listOf(
+            mapOf("domains" to listOf("ads.example.com")),
+        ))
+
+        // buildDnsPacket crafts a query with srcPort=54321 (0xD431) and dstPort=53 (0x0035)
+        val queryPacket = buildDnsPacket("ads.example.com")
+        var response: ByteArray = byteArrayOf()
+
+        DnsGuardEngine.interceptPacket(queryPacket) { bytes: ByteArray ->
+            response = bytes
+            Unit
+        }
+
+        assertTrue("Response packet must not be empty", response.isNotEmpty())
+
+        val ihl = (response[0].toInt() and 0x0F) * 4
+        val respSrcPort = ((response[ihl].toInt() and 0xFF) shl 8) or (response[ihl + 1].toInt() and 0xFF)
+        val respDstPort = ((response[ihl + 2].toInt() and 0xFF) shl 8) or (response[ihl + 3].toInt() and 0xFF)
+
+        assertEquals("Response UDP source port must be 53 (DNS server port)", 53, respSrcPort)
+        assertEquals("Response UDP destination port must match original query's source port 54321", 54321, respDstPort)
+    }
 }

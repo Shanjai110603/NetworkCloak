@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
@@ -398,6 +399,9 @@ class _ConnectionCard extends StatelessWidget {
   }
 
   String _fmt(int b) {
+    if (kIsWeb || defaultTargetPlatform == TargetPlatform.windows) {
+      if (b == 0) return 'N/A';
+    }
     if (b < 1024) return '${b}B';
     if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)}KB';
     return '${(b / 1024 / 1024).toStringAsFixed(1)}MB';

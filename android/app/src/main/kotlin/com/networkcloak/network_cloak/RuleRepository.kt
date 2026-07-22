@@ -223,12 +223,15 @@ object RuleRepository {
                 continue
             }
             // ── Bucket routing ────────────────────────────────────
+            // Note: Caller (Dart syncRulesToNative) pre-sorts rules within each tier
+            // so the winner (blocking first, newest first) appears first in the input list.
+            // Native relies on putIfAbsent so the FIRST rule encountered for an appId wins!
             when {
                 isGlobal      -> globalRules.add(RuleWithConditions.from(rule))
                 priority == 2 -> TemporaryRule.from(rule)?.let { temporaryRules.add(it) }
-                priority == 3 -> if (appId != null) sessionRules[appId] = action
-                priority == 5 -> if (appId != null) profileRules[appId] = action
-                else          -> if (appId != null) manualRules[appId]  = action
+                priority == 3 -> if (appId != null) sessionRules.putIfAbsent(appId, action)
+                priority == 5 -> if (appId != null) profileRules.putIfAbsent(appId, action)
+                else          -> if (appId != null) manualRules.putIfAbsent(appId, action)
             }
         }
 
@@ -309,20 +312,39 @@ object RuleRepository {
     fun getBlockedAppIds(context: Context): List<String> {
         cachedBlockedApps?.let { return it }
 
-        val blocked = mutableListOf<String>()
-        val pm = context.packageManager
-        val packages = pm.getInstalledPackages(0)
+        val appsToRoute = mutableSetOf<String>()
+        val pm = try { context.packageManager } catch (_: Exception) { null }
+        val packages = try { pm?.getInstalledPackages(0) } catch (_: Exception) { null } ?: emptyList()
 
         for (pkg in packages) {
             val appId = pkg.packageName
             if (appId == "com.networkcloak.network_cloak") continue
-            val action = evaluate(appId = appId, destIp = "", destPort = 0,
-                                  protocol = "TCP", isBackground = false)
-            if (action == "block") blocked.add(appId)
+
+            if (quickBlockedApps.contains(appId) || manualRules.containsKey(appId) || sessionRules.containsKey(appId)) {
+                appsToRoute.add(appId)
+                continue
+            }
+            for (r in temporaryRules) {
+                if (r.appId == appId) { appsToRoute.add(appId); break }
+            }
+            val action = evaluate(appId = appId, destIp = "", destPort = 0, protocol = "TCP", isBackground = false)
+            if (action == "block") {
+                appsToRoute.add(appId)
+            }
         }
 
-        cachedBlockedApps = blocked
-        return blocked
+        // If Cloak Engine, Global LAN block, or DNS Guard is active, route all installed apps into TUN
+        if (cloakEnabled || blockLanTraffic || DnsGuardEngine.hasBlocklists()) {
+            for (pkg in packages) {
+                if (pkg.packageName != "com.networkcloak.network_cloak") {
+                    appsToRoute.add(pkg.packageName)
+                }
+            }
+        }
+
+        val resultList = appsToRoute.toList()
+        cachedBlockedApps = resultList
+        return resultList
     }
 
     // ── Core evaluation ───────────────────────────────────────────
@@ -452,11 +474,9 @@ object RuleRepository {
             "allowLanOnly"               -> if (isLanAddress(destIp)) "allow" else "block"
             "allowInternetOnly"          -> if (!isLanAddress(destIp)) "allow" else "block"
             // "ask" fails closed per Volume I §4 Safe Defaults.
-            // The UI popup is handled by Watchtower; until the user answers,
-            // the packet is blocked — the previous "fail open" behaviour was
-            // a security defect (audit bug #10).
             "ask"                        -> "block"
-            else                         -> "allow"
+            // Item 21: Unrecognized/unhandled actions fail closed (block) rather than fail open.
+            else                         -> "block"
         }
     }
 

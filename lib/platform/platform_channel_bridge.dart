@@ -87,10 +87,11 @@ class PlatformChannelBridge
   }
 
   @override
-  Future<void> updateRules(List<Map<String, dynamic>> rules, {bool blockLan = false}) async {
+  Future<void> updateRules(List<Map<String, dynamic>> rules, {bool blockLan = false, String? trustLevel}) async {
     await _method.invokeMethod('updateRules', {
       'rules': rules,
       'blockLan': blockLan,
+      if (trustLevel != null) 'trustLevel': trustLevel,
     });
   }
 

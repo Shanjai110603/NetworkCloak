@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
@@ -6,22 +7,42 @@ use windows::Win32::Networking::WinSock::AF_INET;
 use windows::Win32::NetworkManagement::IpHelper::*;
 use crate::process_mapper::{get_process_path, get_filename};
 
-/// Periodically polls TCP and UDP connection tables, maps processes,
+pub type ConnectionKey = (u32, String, u16);
+
+/// Periodically polls TCP connection tables, maps processes,
 /// and sends live connection logs back to the main IPC channel.
 pub fn start_monitor(tx: Sender<serde_json::Value>) {
     thread::spawn(move || {
+        let mut seen = HashSet::<ConnectionKey>::new();
         loop {
-            if let Ok(connections) = get_active_connections() {
-                for conn in connections {
+            if let Ok(entries) = get_active_connections() {
+                let (new_events, new_seen) = compute_new_events(&seen, entries);
+                for conn in new_events {
                     let _ = tx.send(conn);
                 }
+                seen = new_seen;
             }
             thread::sleep(Duration::from_millis(1000));
         }
     });
 }
 
-fn get_active_connections() -> Result<Vec<serde_json::Value>, String> {
+pub fn compute_new_events(
+    previous_seen: &HashSet<ConnectionKey>,
+    current_entries: Vec<(serde_json::Value, ConnectionKey)>,
+) -> (Vec<serde_json::Value>, HashSet<ConnectionKey>) {
+    let mut new_events = Vec::new();
+    let mut new_seen = HashSet::new();
+    for (event, key) in current_entries {
+        if !previous_seen.contains(&key) {
+            new_events.push(event);
+        }
+        new_seen.insert(key);
+    }
+    (new_events, new_seen)
+}
+
+fn get_active_connections() -> Result<Vec<(serde_json::Value, ConnectionKey)>, String> {
     let mut connections = Vec::new();
 
     // ── TCP Connections ──────────────────────────────────────
@@ -75,7 +96,8 @@ fn get_active_connections() -> Result<Vec<serde_json::Value>, String> {
                 let path = get_process_path(pid);
                 let name = get_filename(&path);
 
-                connections.push(json!({
+                let key: ConnectionKey = (pid, remote_ip.to_string(), remote_port);
+                let event = json!({
                     "type": "ConnectionEvent",
                     "uid": pid, // on Windows we use PID as UID
                     "appId": name,
@@ -89,10 +111,41 @@ fn get_active_connections() -> Result<Vec<serde_json::Value>, String> {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_millis() as u64)
-                }));
+                });
+                connections.push((event, key));
             }
         }
     }
 
     Ok(connections)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_new_events_suppresses_duplicates() {
+        let key1: ConnectionKey = (1234, "8.8.8.8".to_string(), 443);
+        let key2: ConnectionKey = (5678, "1.1.1.1".to_string(), 80);
+
+        let entries1 = vec![
+            (json!({"conn": 1}), key1.clone()),
+            (json!({"conn": 2}), key2.clone()),
+        ];
+
+        let mut seen = HashSet::new();
+        let (new_events1, new_seen1) = compute_new_events(&seen, entries1);
+        assert_eq!(new_events1.len(), 2);
+        assert_eq!(new_seen1.len(), 2);
+
+        // Next poll with same active connections
+        seen = new_seen1;
+        let entries2 = vec![
+            (json!({"conn": 1}), key1.clone()),
+            (json!({"conn": 2}), key2.clone()),
+        ];
+        let (new_events2, _) = compute_new_events(&seen, entries2);
+        assert_eq!(new_events2.len(), 0, "Duplicate active connections must be suppressed");
+    }
 }

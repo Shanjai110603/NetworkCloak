@@ -99,6 +99,24 @@ pub fn find_paths_by_name(target_name: &str) -> Vec<String> {
             let _ = CloseHandle(snap);
         }
     }
+    paths.sort();
     paths.dedup();
     paths
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_dedup_paths_removes_non_adjacent_duplicates() {
+        let mut paths = vec![
+            "C:\\App\\chrome.exe".to_string(),
+            "C:\\Program Files\\chrome.exe".to_string(),
+            "C:\\App\\chrome.exe".to_string(),
+        ];
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], "C:\\App\\chrome.exe");
+        assert_eq!(paths[1], "C:\\Program Files\\chrome.exe");
+    }
 }

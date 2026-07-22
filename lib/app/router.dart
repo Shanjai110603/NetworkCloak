@@ -17,9 +17,25 @@ import '../presentation/screens/settings/advanced_settings_screen.dart';
 import '../presentation/screens/settings/about_screen.dart';
 import '../presentation/screens/quick_block/quick_block_screen.dart';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../presentation/providers/providers.dart';
+
+final routerProvider = Provider<GoRouter>((ref) {
+  final onboardingAsync = ref.watch(onboardingCompleteProvider);
+  final isComplete = onboardingAsync.valueOrNull ?? false;
+
+  return GoRouter(
+    initialLocation: isComplete ? '/' : '/onboarding',
+    routes: _routes,
+  );
+});
+
 final router = GoRouter(
   initialLocation: '/onboarding',
-  routes: [
+  routes: _routes,
+);
+
+final _routes = <RouteBase>[
     GoRoute(
       path: '/onboarding',
       builder: (ctx, state) => const OnboardingFlow(),
@@ -85,8 +101,7 @@ final router = GoRouter(
         ),
       ],
     ),
-  ],
-);
+];
 
 class _MainShell extends StatelessWidget {
   const _MainShell({required this.child});

@@ -104,6 +104,9 @@ class ModeNotifier extends StateNotifier<ProtectionMode> {
     _ref.listen<AsyncValue<NetworkStatus>>(networkStatusProvider, (prev, next) async {
       final status = next.value;
       if (status == null) return;
+      if (status == NetworkStatus.disconnected || (status.trustLevel == NetworkTrustLevel.unknown && status.ssid == null)) {
+        return; // Item 15: No real network data yet — don't classify/alert!
+      }
 
       final autoSwitch = _ref.read(autoSwitchEnabledProvider);
       if (!autoSwitch) return; // Guard auto-switch (Item 7)
@@ -126,7 +129,7 @@ class ModeNotifier extends StateNotifier<ProtectionMode> {
         bssid: status.bssid,
         authType: status.authType,
         isRoaming: status.isRoaming,
-        hasCaptivePortal: false,
+        hasCaptivePortal: status.hasCaptivePortal, // Item 16: pass real hasCaptivePortal!
         isCellular: status.isCellular,
         trustedNetworks: trusted,
       );
@@ -180,14 +183,20 @@ class ModeNotifier extends StateNotifier<ProtectionMode> {
 final networkStatusProvider = StreamProvider<NetworkStatus>((ref) async* {
   final bridge = ref.watch(platformBridgeProvider);
   
-  yield const NetworkStatus(
-    trustLevel: NetworkTrustLevel.trusted,
-    ssid: 'Ethernet/Wi-Fi',
-    bssid: '00:11:22:33:44:55',
-    authType: 'WPA2-PSK',
-    isRoaming: false,
-    isCellular: false,
-  );
+  try {
+    final initialMap = await bridge.getCurrentNetworkInfo();
+    if (initialMap.isNotEmpty) {
+      yield NetworkStatus(
+        trustLevel: _parseTrust(initialMap['trustLevel'] as String? ?? 'unknown'),
+        ssid: initialMap['ssid'] as String?,
+        bssid: initialMap['bssid'] as String?,
+        authType: initialMap['authType'] as String?,
+        isRoaming: initialMap['isRoaming'] as bool? ?? false,
+        hasCaptivePortal: initialMap['hasCaptivePortal'] as bool? ?? false,
+        isCellular: initialMap['isCellular'] as bool? ?? false,
+      );
+    }
+  } catch (_) {}
 
   await for (final e in bridge.networkChanges) {
     yield NetworkStatus(
@@ -196,6 +205,7 @@ final networkStatusProvider = StreamProvider<NetworkStatus>((ref) async* {
       bssid: e['bssid'] as String?,
       authType: e['authType'] as String?,
       isRoaming: e['isRoaming'] as bool? ?? false,
+      hasCaptivePortal: e['hasCaptivePortal'] as bool? ?? false,
       isCellular: e['isCellular'] as bool? ?? false,
     );
   }
@@ -435,7 +445,7 @@ class FirewallRulesNotifier
           'id': rule.id,
           'appId': rule.appId,
           'action': rule.action.name,
-          'priority': isAppRule ? RulePriority.manualApp.value : rule.priority.value,
+          'priority': rule.priority.value,
           'isGlobal': rule.isGlobal,
           'conditionsJson': rule.conditionsJson,
           // Include createdAt so native can apply newest-wins tiebreaker
@@ -465,7 +475,10 @@ class FirewallRulesNotifier
           activeMode == ProtectionMode.travel ||
           activeMode == ProtectionMode.lockdown;
 
-      await _bridge.updateRules(serialized, blockLan: blockLan);
+      final currentNetwork = _ref.read(networkStatusProvider).valueOrNull;
+      final trustLevelStr = currentNetwork?.trustLevel.name;
+
+      await _bridge.updateRules(serialized, blockLan: blockLan, trustLevel: trustLevelStr);
     } catch (e, st) {
       // Previously silently ignored — now logged so issues are visible
       debugPrint('[NC] syncRulesToNative failed: $e\n$st');
@@ -1160,7 +1173,6 @@ class ThroughputNotifier extends StateNotifier<ThroughputState> {
       for (final e in batch) {
         final int bytes = e['bytes'] as int? ?? 0;
         _bytesAccumulatedInSecond += bytes;
-        _totalBytesAccumulated += bytes;
       }
     });
 
@@ -1200,6 +1212,8 @@ class ThroughputNotifier extends StateNotifier<ThroughputState> {
 
       if (systemTotalSpeed > 0) {
         _totalBytesAccumulated += systemTotalSpeed.toInt();
+      } else {
+        _totalBytesAccumulated += vpnSpeed.toInt();
       }
 
       state = ThroughputState(
@@ -1267,6 +1281,31 @@ class CloakEnabledNotifier extends StateNotifier<bool> {
     state = enabled;
     await _ref.read(platformBridgeProvider).setCloakEnabled(enabled);
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Onboarding Completion Persistence (Item 14)
+// ─────────────────────────────────────────────────────────────
+
+final onboardingCompleteProvider = FutureProvider<bool>((ref) async {
+  final db = ref.watch(databaseProvider);
+  final setting = await (db.select(db.settings)
+        ..where((t) => t.category.equals('onboarding') & t.key.equals('complete')))
+      .getSingleOrNull();
+  return setting?.value == 'true';
+});
+
+Future<void> markOnboardingComplete(WidgetRef ref) async {
+  final db = ref.read(databaseProvider);
+  final now = DateTime.now().millisecondsSinceEpoch;
+  await db.into(db.settings).insertOnConflictUpdate(SettingsCompanion(
+    category: const Value('onboarding'),
+    key: const Value('complete'),
+    value: const Value('true'),
+    valueType: const Value('bool'),
+    updatedAt: Value(now),
+  ));
+  ref.invalidate(onboardingCompleteProvider);
 }
 
 

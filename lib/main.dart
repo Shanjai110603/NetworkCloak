@@ -15,6 +15,7 @@ class NetworkCloakApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
+    final routerConfig = ref.watch(routerProvider);
 
     return MaterialApp.router(
       title: 'Network Cloak',
@@ -22,7 +23,7 @@ class NetworkCloakApp extends ConsumerWidget {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: themeMode,
-      routerConfig: router,
+      routerConfig: routerConfig,
     );
   }
 }

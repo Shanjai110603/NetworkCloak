@@ -431,14 +431,19 @@ class NetworkCloakVpnService : VpnService() {
         val uid = if (isIpv6) -1 else getConnectionOwnerUid(srcIp, srcPort, dstIp, dstPort, protocol)
         val appId = UidMapper.getAppId(this, uid)
 
-        // Decision logic:
-        // In Lockdown mode: Check allowlist.
-        // In Normal mode: All packets in TUN belong to blocked apps (since configureVpn only added blocked apps).
-        // Exceptions: VPN app itself ("com.networkcloak.network_cloak").
+        val isBackground = if (uid != -1) AppStateTracker.isBackground(uid) else false
         val decision = if (isLockdown) {
             if (RuleRepository.isAppAllowedInLockdown(appId)) "allow" else "block"
+        } else if (appId == "com.networkcloak.network_cloak") {
+            "allow"
         } else {
-            if (appId == "com.networkcloak.network_cloak") "allow" else "block"
+            RuleRepository.evaluate(
+                appId = appId,
+                destIp = dstIp,
+                destPort = dstPort,
+                protocol = protocolStr,
+                isBackground = isBackground
+            )
         }
 
         val debugLogEnabled = getSharedPreferences("nc_settings", Context.MODE_PRIVATE)

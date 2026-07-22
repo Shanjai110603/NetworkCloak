@@ -139,6 +139,8 @@ object DnsGuardEngine {
         Log.i(TAG, "Blocklist updated: ${blocklist.size} domains")
     }
 
+    fun hasBlocklists(): Boolean = blocklist.isNotEmpty()
+
     fun addDomain(domain: String)    = blocklist.add(domain.lowercase().trimEnd('.'))
     fun removeDomain(domain: String) = blocklist.remove(domain.lowercase().trimEnd('.'))
     fun isBlocked(domain: String): Boolean =
@@ -487,15 +489,19 @@ object DnsGuardEngine {
         PacketUtils.writeChecksum(ip, 10, ipCk)
 
         // ── UDP header: swap src ↔ dst port ──────────────────────
-        val srcPort = ((originalPacket[ihl + 2].toInt() and 0xFF) shl 8) or
-                       (originalPacket[ihl + 3].toInt() and 0xFF)
-        val dstPort = ((originalPacket[ihl].toInt() and 0xFF) shl 8) or
-                       (originalPacket[ihl + 1].toInt() and 0xFF)
+        // Original packet bytes ihl..ihl+1 are client's src port (e.g. 54321)
+        // Original packet bytes ihl+2..ihl+3 are client's dst port (53)
+        val origSrcPort = ((originalPacket[ihl].toInt() and 0xFF) shl 8) or
+                           (originalPacket[ihl + 1].toInt() and 0xFF)
+        val origDstPort = ((originalPacket[ihl + 2].toInt() and 0xFF) shl 8) or
+                           (originalPacket[ihl + 3].toInt() and 0xFF)
         val udpHeader = ByteArray(8)
-        udpHeader[0] = ((dstPort shr 8) and 0xFF).toByte()
-        udpHeader[1] = (dstPort and 0xFF).toByte()
-        udpHeader[2] = ((srcPort shr 8) and 0xFF).toByte()
-        udpHeader[3] = (srcPort and 0xFF).toByte()
+        // Response source port = original dest port (53)
+        udpHeader[0] = ((origDstPort shr 8) and 0xFF).toByte()
+        udpHeader[1] = (origDstPort and 0xFF).toByte()
+        // Response dest port = original source port (client's ephemeral port)
+        udpHeader[2] = ((origSrcPort shr 8) and 0xFF).toByte()
+        udpHeader[3] = (origSrcPort and 0xFF).toByte()
         udpHeader[4] = ((udpLen shr 8) and 0xFF).toByte()
         udpHeader[5] = (udpLen and 0xFF).toByte()
         // UDP checksum = 0: valid for IPv4 per RFC 768 (unlike TCP which is mandatory)

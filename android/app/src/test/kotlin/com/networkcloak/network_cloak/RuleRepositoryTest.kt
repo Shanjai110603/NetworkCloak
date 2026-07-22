@@ -326,6 +326,100 @@ class RuleRepositoryTest {
         assertEquals("Hour 20 must be outside day window 09–17 (falls to default block)", "block", dOut)
     }
 
+    // ── allowLanOnly and allowInternetOnly per-packet enforcement ──────────────
+
+    @Test
+    fun `allowLanOnly allows LAN destinations and blocks internet destinations for the same app`() {
+        RuleRepository.updateRules(listOf(
+            mapOf("id" to "lan1", "appId" to "com.example.lanapp", "action" to "allowLanOnly",
+                  "priority" to 4, "isGlobal" to false, "conditionsJson" to "{}"),
+        ))
+
+        val lanDecision = RuleRepository.evaluate(
+            appId = "com.example.lanapp", destIp = "192.168.1.100",
+            destPort = 80, protocol = "TCP", isBackground = false,
+        )
+        val wanDecision = RuleRepository.evaluate(
+            appId = "com.example.lanapp", destIp = "8.8.8.8",
+            destPort = 80, protocol = "TCP", isBackground = false,
+        )
+
+        assertEquals("allowLanOnly must allow LAN IP 192.168.1.100", "allow", lanDecision)
+        assertEquals("allowLanOnly must block internet IP 8.8.8.8", "block", wanDecision)
+    }
+
+    @Test
+    fun `allowInternetOnly blocks LAN destinations and allows internet destinations for the same app`() {
+        RuleRepository.updateRules(listOf(
+            mapOf("id" to "wan1", "appId" to "com.example.wanapp", "action" to "allowInternetOnly",
+                  "priority" to 4, "isGlobal" to false, "conditionsJson" to "{}"),
+        ))
+
+        val lanDecision = RuleRepository.evaluate(
+            appId = "com.example.wanapp", destIp = "192.168.1.100",
+            destPort = 80, protocol = "TCP", isBackground = false,
+        )
+        val wanDecision = RuleRepository.evaluate(
+            appId = "com.example.wanapp", destIp = "8.8.8.8",
+            destPort = 80, protocol = "TCP", isBackground = false,
+        )
+
+        assertEquals("allowInternetOnly must block LAN IP 192.168.1.100", "block", lanDecision)
+        assertEquals("allowInternetOnly must allow internet IP 8.8.8.8", "allow", wanDecision)
+    }
+
+    @Test
+    fun `global rule matching trustLevel trusted fires when lastKnownContext trustLevel is trusted`() {
+        RuleRepository.lastKnownContext = RuleContext("wifi", "trusted", currentHour = 12)
+        RuleRepository.updateRules(listOf(
+            mapOf("id" to "g_trusted", "action" to "allow", "isGlobal" to true,
+                  "conditionsJson" to """{"trustLevel":"trusted"}"""),
+        ))
+
+        val decision = RuleRepository.evaluate(
+            appId = "com.unruled.app", destIp = "8.8.8.8",
+            destPort = 443, protocol = "TCP", isBackground = false,
+        )
+
+        assertEquals("Global rule scoped to trustLevel=trusted must fire when context is trusted", "allow", decision)
+    }
+
+    @Test
+    fun `updateRules putIfAbsent preserves first encountered rule for same appId in same tier`() {
+        // Feed two manual rules for com.example.app: block first, then allow
+        RuleRepository.updateRules(listOf(
+            mapOf("id" to "r_block", "appId" to "com.example.app", "action" to "block",
+                  "priority" to 4, "isGlobal" to false, "conditionsJson" to "{}"),
+            mapOf("id" to "r_allow", "appId" to "com.example.app", "action" to "allow",
+                  "priority" to 4, "isGlobal" to false, "conditionsJson" to "{}"),
+        ))
+
+        val decision1 = RuleRepository.evaluate("com.example.app", "1.1.1.1", 443, "TCP", false)
+        assertEquals("First rule (block) must win via putIfAbsent", "block", decision1)
+
+        // Feed in opposite order: allow first, then block
+        RuleRepository.updateRules(listOf(
+            mapOf("id" to "r_allow2", "appId" to "com.example.app", "action" to "allow",
+                  "priority" to 4, "isGlobal" to false, "conditionsJson" to "{}"),
+            mapOf("id" to "r_block2", "appId" to "com.example.app", "action" to "block",
+                  "priority" to 4, "isGlobal" to false, "conditionsJson" to "{}"),
+        ))
+
+        val decision2 = RuleRepository.evaluate("com.example.app", "1.1.1.1", 443, "TCP", false)
+        assertEquals("First rule (allow) must win via putIfAbsent", "allow", decision2)
+    }
+
+    @Test
+    fun `unrecognized or bogus rule action fails closed to block`() {
+        RuleRepository.updateRules(listOf(
+            mapOf("id" to "r_bogus", "appId" to "com.example.bogus", "action" to "super_unrecognized_action",
+                  "priority" to 4, "isGlobal" to false, "conditionsJson" to "{}"),
+        ))
+
+        val decision = RuleRepository.evaluate("com.example.bogus", "1.1.1.1", 443, "TCP", false)
+        assertEquals("Unrecognized action string must fail closed to block", "block", decision)
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun assertDoesNotThrow(block: () -> Unit) {

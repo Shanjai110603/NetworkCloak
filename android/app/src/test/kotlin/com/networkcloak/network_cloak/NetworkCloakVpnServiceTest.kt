@@ -29,6 +29,9 @@ class NetworkCloakVpnServiceTest {
         every { NativeEventBus.postProtectionStateChanged(any()) } returns Unit
         every { NativeEventBus.createAlertsChannel(any()) } returns Unit
 
+        mockkObject(AppStateTracker)
+        every { AppStateTracker.startMonitoring(any(), any()) } returns Unit
+
         every { mockPrefs.edit() } returns mockEditor
         every { mockEditor.putString(any(), any()) } returns mockEditor
         every { mockEditor.putBoolean(any(), any()) } returns mockEditor
@@ -38,7 +41,6 @@ class NetworkCloakVpnServiceTest {
         val rawService = NetworkCloakVpnService()
         service = spyk<NetworkCloakVpnService>(rawService, recordPrivateCalls = true)
 
-        // Mock base context / shared preferences delegation
         every { service.getSharedPreferences(any(), any()) } returns mockPrefs
         every { service.startForeground(any(), any()) } returns Unit
         every { service.stopForeground(any<Int>()) } returns Unit
@@ -49,6 +51,8 @@ class NetworkCloakVpnServiceTest {
         every { service["configureVpn"]() } returns Unit
         every { service["buildNotification"]() } returns mockk<android.app.Notification>(relaxed = true)
         every { service["packetLoop"]() } returns Unit
+        every { service["registerScreenReceiver"]() } returns Unit
+        every { service["unregisterScreenReceiver"]() } returns Unit
 
         // Inject a mock ParcelFileDescriptor so startVpn can establish a TUN context
         val mockPfd = mockk<android.os.ParcelFileDescriptor>(relaxed = true)
@@ -138,5 +142,33 @@ class NetworkCloakVpnServiceTest {
         assertEquals(NetworkCloakVpnService.VpnMode.OFF, NetworkCloakVpnService.currentMode)
         assertFalse(DnsGuardEngine.isAttached)
         verify { mockEditor.putString("last_vpn_mode", "OFF") }
+    }
+
+    @Test
+    fun `processPacket evaluates allowLanOnly rule per-packet for LAN vs WAN destination`() {
+        RuleRepository.updateRules(listOf(
+            mapOf("id" to "r_lan", "appId" to "com.example.lanapp", "action" to "allowLanOnly",
+                  "priority" to 4, "isGlobal" to false, "conditionsJson" to "{}")
+        ))
+
+        // Process LAN packet (192.168.1.50)
+        val lanDecision = RuleRepository.evaluate("com.example.lanapp", "192.168.1.50", 80, "TCP", false)
+        // Process WAN packet (8.8.8.8)
+        val wanDecision = RuleRepository.evaluate("com.example.lanapp", "8.8.8.8", 80, "TCP", false)
+
+        assertEquals("LAN destination must be allowed", "allow", lanDecision)
+        assertEquals("WAN destination must be blocked", "block", wanDecision)
+    }
+
+    @Test
+    fun `cloakEnabled blocks mDNS packet even for an allowed app`() {
+        RuleRepository.cloakEnabled = true
+        RuleRepository.updateRules(listOf(
+            mapOf("id" to "r_allow", "appId" to "com.example.allowedapp", "action" to "allow",
+                  "priority" to 4, "isGlobal" to false, "conditionsJson" to "{}")
+        ))
+
+        val mdnsDecision = RuleRepository.evaluate("com.example.allowedapp", "224.0.0.251", 5353, "UDP", false)
+        assertEquals("mDNS port 5353 must be blocked when Cloak Engine is active", "block", mdnsDecision)
     }
 }
