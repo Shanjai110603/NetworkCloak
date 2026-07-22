@@ -23,7 +23,11 @@ class MainActivity : FlutterActivity() {
             val intent = Intent(this, NetworkCloakVpnService::class.java).apply {
                 putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START)
             }
-            startService(intent)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
         }
     }
 }
