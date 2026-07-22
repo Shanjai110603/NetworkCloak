@@ -942,6 +942,28 @@ class _RealTimeTrafficDashboard extends ConsumerWidget {
                           letterSpacing: -0.5,
                         ),
                   ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Text(
+                        '▼ ${_fmtSpeed(throughput.rxSpeed)}',
+                        style: const TextStyle(
+                          color: NcColors.protected,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '▲ ${_fmtSpeed(throughput.txSpeed)}',
+                        style: const TextStyle(
+                          color: NcColors.accent,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
               Column(

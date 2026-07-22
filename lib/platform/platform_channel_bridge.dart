@@ -130,6 +130,15 @@ class PlatformChannelBridge
     return Map<String, dynamic>.from(result ?? {});
   }
 
+  Future<Map<String, dynamic>> getSystemTrafficStats() async {
+    try {
+      final result = await _method.invokeMethod<Map>('getSystemTrafficStats');
+      return Map<String, dynamic>.from(result ?? {});
+    } catch (_) {
+      return {};
+    }
+  }
+
   @override
   Stream<Map<String, dynamic>> get networkChanges {
     return _events

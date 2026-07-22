@@ -129,6 +129,16 @@ object PlatformChannelHandler {
                     result.success(info)
                 }
             }
+            "getSystemTrafficStats" -> {
+                val rx = android.net.TrafficStats.getTotalRxBytes()
+                val tx = android.net.TrafficStats.getTotalTxBytes()
+                val unavail = android.net.TrafficStats.UNSUPPORTED.toLong()
+                result.success(mapOf(
+                    "rxBytes" to if (rx == unavail) 0L else rx,
+                    "txBytes" to if (tx == unavail) 0L else tx,
+                    "timestamp" to System.currentTimeMillis(),
+                ))
+            }
             "getStatus" -> {
                 result.success(mapOf(
                     "isRunning" to NetworkCloakVpnService.isRunning,

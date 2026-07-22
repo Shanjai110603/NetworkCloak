@@ -1097,24 +1097,32 @@ class ThroughputState {
   ThroughputState({
     required this.speedHistory,
     required this.currentSpeed,
+    this.rxSpeed = 0.0,
+    this.txSpeed = 0.0,
     required this.peakSpeed,
     required this.totalBytes,
   });
 
   final List<double> speedHistory; // Rolling history in KB/s
-  final double currentSpeed;       // Current speed in B/s
+  final double currentSpeed;       // Current total speed in B/s
+  final double rxSpeed;            // Download speed in B/s
+  final double txSpeed;            // Upload speed in B/s
   final double peakSpeed;          // Peak speed in B/s
   final int totalBytes;            // Accumulated total bytes
 
   ThroughputState copyWith({
     List<double>? speedHistory,
     double? currentSpeed,
+    double? rxSpeed,
+    double? txSpeed,
     double? peakSpeed,
     int? totalBytes,
   }) {
     return ThroughputState(
       speedHistory: speedHistory ?? this.speedHistory,
       currentSpeed: currentSpeed ?? this.currentSpeed,
+      rxSpeed: rxSpeed ?? this.rxSpeed,
+      txSpeed: txSpeed ?? this.txSpeed,
       peakSpeed: peakSpeed ?? this.peakSpeed,
       totalBytes: totalBytes ?? this.totalBytes,
     );
@@ -1130,6 +1138,8 @@ class ThroughputNotifier extends StateNotifier<ThroughputState> {
       : super(ThroughputState(
           speedHistory: List.filled(15, 0.0),
           currentSpeed: 0.0,
+          rxSpeed: 0.0,
+          txSpeed: 0.0,
           peakSpeed: 0.0,
           totalBytes: 0,
         )) {
@@ -1141,32 +1151,62 @@ class ThroughputNotifier extends StateNotifier<ThroughputState> {
   Timer? _timer;
   int _bytesAccumulatedInSecond = 0;
   int _totalBytesAccumulated = 0;
+  int _lastRxBytes = -1;
+  int _lastTxBytes = -1;
 
   void _startListening() {
     final bridge = _ref.read(platformBridgeProvider);
     _sub = bridge.connectionEvents.listen((batch) {
       for (final e in batch) {
         final int bytes = e['bytes'] as int? ?? 0;
-        // Filter out 'dns' or UID=-1 if desired, but here we track total aggregate throughput
         _bytesAccumulatedInSecond += bytes;
         _totalBytesAccumulated += bytes;
       }
     });
 
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
-      final double speed = _bytesAccumulatedInSecond.toDouble(); // bytes per second
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) async {
+      double sysRxSpeed = 0.0;
+      double sysTxSpeed = 0.0;
+
+      try {
+        final stats = await bridge.getSystemTrafficStats();
+        final int currentRx = stats['rxBytes'] as int? ?? -1;
+        final int currentTx = stats['txBytes'] as int? ?? -1;
+
+        if (currentRx >= 0 && currentTx >= 0) {
+          if (_lastRxBytes >= 0 && _lastTxBytes >= 0) {
+            final int rxDelta = currentRx - _lastRxBytes;
+            final int txDelta = currentTx - _lastTxBytes;
+            if (rxDelta >= 0) sysRxSpeed = rxDelta.toDouble();
+            if (txDelta >= 0) sysTxSpeed = txDelta.toDouble();
+          }
+          _lastRxBytes = currentRx;
+          _lastTxBytes = currentTx;
+        }
+      } catch (_) {}
+
+      final double vpnSpeed = _bytesAccumulatedInSecond.toDouble();
       _bytesAccumulatedInSecond = 0;
 
-      final double peak = speed > state.peakSpeed ? speed : state.peakSpeed;
+      final double systemTotalSpeed = sysRxSpeed + sysTxSpeed;
+      final double effectiveSpeed = systemTotalSpeed > 0 ? systemTotalSpeed : vpnSpeed;
+
+      final double peak = effectiveSpeed > state.peakSpeed ? effectiveSpeed : state.peakSpeed;
       final List<double> history = List<double>.from(state.speedHistory);
       if (history.isNotEmpty) {
         history.removeAt(0);
       }
-      history.add(speed / 1024.0); // Convert to KB/s for history graph
+      history.add(effectiveSpeed / 1024.0); // Convert to KB/s for history graph
+
+      if (systemTotalSpeed > 0) {
+        _totalBytesAccumulated += systemTotalSpeed.toInt();
+      }
 
       state = ThroughputState(
         speedHistory: history,
-        currentSpeed: speed,
+        currentSpeed: effectiveSpeed,
+        rxSpeed: sysRxSpeed,
+        txSpeed: sysTxSpeed,
         peakSpeed: peak,
         totalBytes: _totalBytesAccumulated,
       );
