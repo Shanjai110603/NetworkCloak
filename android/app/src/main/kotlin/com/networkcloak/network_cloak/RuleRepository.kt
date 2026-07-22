@@ -222,19 +222,13 @@ object RuleRepository {
                 Log.e(TAG, "Rule $id: isGlobal=true with priority=$priority is ambiguous — rejected")
                 continue
             }
-            // Non-global rules must have a priority in the defined range 2–5
-            if (!isGlobal && (priority == null || priority !in 2..5)) {
-                Log.e(TAG, "Rule $id: non-global rule has invalid priority=$priority — rejected")
-                continue
-            }
-
             // ── Bucket routing ────────────────────────────────────
             when {
                 isGlobal      -> globalRules.add(RuleWithConditions.from(rule))
                 priority == 2 -> TemporaryRule.from(rule)?.let { temporaryRules.add(it) }
                 priority == 3 -> if (appId != null) sessionRules[appId] = action
-                priority == 4 -> if (appId != null) manualRules[appId]  = action
                 priority == 5 -> if (appId != null) profileRules[appId] = action
+                else          -> if (appId != null) manualRules[appId]  = action
             }
         }
 

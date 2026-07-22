@@ -61,7 +61,6 @@ object PlatformChannelHandler {
                 val activity = context as? android.app.Activity
                 
                 // 1. Request POST_NOTIFICATIONS at runtime on Android 13+ (API 33+)
-                // If not granted, the foreground notification will be silently blocked by the OS
                 if (android.os.Build.VERSION.SDK_INT >= 33 &&
                     context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
                 ) {
@@ -77,11 +76,14 @@ object PlatformChannelHandler {
                     activity?.startActivityForResult(vpnIntent, 1003)
                     result.success(false) // Not started yet, waiting for result callback in MainActivity
                 } else {
-                    // Already prepared � start the service directly
                     val intent = Intent(context, NetworkCloakVpnService::class.java).apply {
                         putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_START)
                     }
-                    context.startService(intent)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
                     result.success(true)
                 }
             }
@@ -90,7 +92,11 @@ object PlatformChannelHandler {
                 val intent = Intent(context, NetworkCloakVpnService::class.java)
                     .putExtra(NetworkCloakVpnService.ACTION_KEY, NetworkCloakVpnService.ACTION_STOP)
                     .putExtra("reason", reason)
-                context.startService(intent)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
                 result.success(null)
             }
             "updateRules" -> {
@@ -347,7 +353,11 @@ object PlatformChannelHandler {
         if (NetworkCloakVpnService.isRunning) {
             val intent = Intent(context, NetworkCloakVpnService::class.java)
                 .putExtra(NetworkCloakVpnService.ACTION_KEY, "refresh")
-            context.startService(intent)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
     }
 

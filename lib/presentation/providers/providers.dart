@@ -418,7 +418,10 @@ class FirewallRulesNotifier
 
       final List<Map<String, dynamic>> serialized = [];
       for (final rule in rules) {
-        if (rule.profileId != null &&
+        // Per-app rules (appId set) must always be sent to native regardless of profile
+        final isAppRule = rule.appId != null && rule.appId!.isNotEmpty;
+        if (!isAppRule &&
+            rule.profileId != null &&
             rule.profileId != 'default' &&
             rule.profileId != 'global' &&
             rule.profileId != '' &&
@@ -432,7 +435,7 @@ class FirewallRulesNotifier
           'id': rule.id,
           'appId': rule.appId,
           'action': rule.action.name,
-          'priority': rule.priority.value,
+          'priority': isAppRule ? RulePriority.manualApp.value : rule.priority.value,
           'isGlobal': rule.isGlobal,
           'conditionsJson': rule.conditionsJson,
           // Include createdAt so native can apply newest-wins tiebreaker

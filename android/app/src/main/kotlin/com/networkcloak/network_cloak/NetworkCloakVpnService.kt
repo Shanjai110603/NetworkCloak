@@ -96,6 +96,15 @@ class NetworkCloakVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.getStringExtra(ACTION_KEY) ?: ACTION_START
+        if (action != ACTION_STOP) {
+            createNotificationChannel()
+            NativeEventBus.createAlertsChannel(this)
+            try {
+                startForeground(NOTIFICATION_ID, buildNotification())
+            } catch (e: Exception) {
+                Log.w(TAG, "startForeground call failed: ${e.message}")
+            }
+        }
         return when (action) {
             ACTION_STOP -> {
                 stopVpn("Stopped by user")
@@ -133,13 +142,18 @@ class NetworkCloakVpnService : VpnService() {
             val builder = Builder()
                 .setSession("Network Cloak")
                 .addAddress("10.0.0.1", 32)
-                .addAddress("fd00::1", 128)
                 .addRoute("0.0.0.0", 0)          // capture all IPv4 traffic
-                .addRoute("::", 0)               // capture all IPv6 traffic
                 .addDnsServer("10.0.0.1")
-                .addDnsServer("fd00::1")
                 .setMtu(1500)
                 .setBlocking(false)
+
+            try {
+                builder.addAddress("2001:db8:1::1", 64)
+                builder.addRoute("::", 0)
+                builder.addDnsServer("2001:db8:1::1")
+            } catch (e: Exception) {
+                Log.w(TAG, "IPv6 setup skipped/not supported: ${e.message}")
+            }
 
             // ── Per-app TCP & UDP blocking strategy ──────────────────────────
             //
